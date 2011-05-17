@@ -1,0 +1,266 @@
+#     Copyright 2007-2008 Massimo Rimondini - Computer Networks Research Group,
+#     Roma Tre University.
+#
+#     This file is part of Netkit.
+#
+#     Netkit is free software: you can redistribute it and/or modify it under
+#     the terms of the GNU General Public License as published by the Free
+#     Software Foundation, either version 3 of the License, or (at your option)
+#     any later version.
+#
+#     Netkit is distributed in the hope that it will be useful, but WITHOUT ANY
+#     WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+#     FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+#     details.
+#
+#     You should have received a copy of the GNU General Public License along
+#     with Netkit.  If not, see <http://www.gnu.org/licenses/>.
+
+
+# Don't do anything by default. This makefile is only intended for invocation
+# from the filesystem building makefile.
+default:
+
+ifeq ($(SUBARCH),amd64)
+export CC=gcc -m64
+else ifeq ($(SUBARCH),i386)
+export CC=gcc -m32
+endif
+
+
+
+EBTABLES_PACKAGE=ebtables-v2.0.8-1.tar.gz
+EBTABLES_DIR=$(patsubst %.tar.gz,%,$(EBTABLES_PACKAGE))
+EBTABLES_PACKAGE_URL=http://downloads.sourceforge.net/ebtables/$(EBTABLES_PACKAGE)?download
+
+EBTABLES_MAKE_I386=$(MAKE) CC='$(CC)' LDFLAGS="-m elf_i386" -C $(EBTABLES_DIR)
+EBTABLES_MAKE_INSTALL_I386=$(SUDO_PFX)$(EBTABLES_MAKE_I386) DESTDIR=$(FS_MOUNT_DIR) INITDIR=/etc/init.d SYSCONFIGDIR=/etc install$(SUDO_SFX)
+EBTABLES_MAKE_AMD64=$(MAKE) CC='$(CC)' LDFLAGS="-m elf_x86_64" CFLAGS="-fPIC" -C $(EBTABLES_DIR)
+EBTABLES_MAKE_INSTALL_AMD64=$(SUDO_PFX)$(EBTABLES_MAKE_AMD64) DESTDIR=$(FS_MOUNT_DIR) INITDIR=/etc/init.d SYSCONFIGDIR=/etc install$(SUDO_SFX)
+
+############################################
+
+IPROUTE_PACKAGE=iproute2-2.6.22-070710.tar.gz
+IPROUTE_DIR=$(patsubst %.tar.gz,%,$(IPROUTE_PACKAGE))
+IPROUTE_PACKAGE_URL=http://devresources.linux-foundation.org/dev/iproute2/download/$(IPROUTE_PACKAGE)
+
+IPROUTE_MAKE_I386=$(MAKE) CC='$(CC)' LDFLAGS="-m32 -L ../lib -L /usr/lib32 -L $(realpath $(IPROUTE_DIR))/libdev/usr/lib" -C $(IPROUTE_DIR)
+IPROUTE_MAKE_INSTALL_I386=$(SUDO_PFX)$(IPROUTE_MAKE_I386) DESTDIR=$(FS_MOUNT_DIR) install$(SUDO_SFX)
+IPROUTE_MAKE_AMD64=$(MAKE) CC='$(CC)' LDFLAGS="-m64 -L ../lib -L $(realpath $(IPROUTE_DIR))/libdev/usr/lib" -C $(IPROUTE_DIR)
+IPROUTE_MAKE_INSTALL_AMD64=$(SUDO_PFX)$(IPROUTE_MAKE_AMD64) DESTDIR=$(FS_MOUNT_DIR) INITDIR=/etc/init.d SYSCONFIGDIR=/etc install$(SUDO_SFX)
+
+IPROUTE_DEV_PACKAGES=pool/main/d/db/libdb4.7-dev_4.7.25-5_$(SUBARCH).deb pool/main/i/iproute/iproute-dev_20080725-2_$(SUBARCH).deb
+
+############################################
+
+IPTABLES_PACKAGE=iptables-1.4.1.1.tar.bz2
+IPTABLES_DIR=$(patsubst %.tar.bz2,%,$(IPTABLES_PACKAGE))
+IPTABLES_PACKAGE_URL=http://www.netfilter.org/projects/iptables/files/$(IPTABLES_PACKAGE)
+
+IPTABLES_CONFIGURE=./configure --enable-libipq --prefix=$(FS_MOUNT_DIR)
+IPTABLES_MAKE=$(MAKE) -C $(IPTABLES_DIR) CFLAGS=-DXTABLES_LIBDIR='\"/libexec/xtables\"'
+IPTABLES_MAKE_INSTALL=$(SUDO_PFX)$(IPTABLES_MAKE) install$(SUDO_SFX)
+
+############################################
+
+QUAGGA_PACKAGE=quagga-0.99.10.tar.gz
+QUAGGA_DIR=$(patsubst %.tar.gz,%,$(QUAGGA_PACKAGE))
+QUAGGA_PACKAGE_URL=http://www.quagga.net/download/$(QUAGGA_PACKAGE)
+
+QUAGGA_CONFIGURE_I386=SNMP_LIBDIR="$(realpath $(QUAGGA_DIR))/libdev/usr/lib" CFLAGS="-m32" LDFLAGS="-m32" CPPFLAGS="-I $(realpath $(QUAGGA_DIR))/include" ./configure  --enable-vtysh --enable-mpls --enable-isisd --enable-snmp --enable-opaque-lsa --enable-ospf-te --enable-multipath=50 --enable-isis-topology --prefix=$(FS_MOUNT_DIR) --sysconfdir=/etc/quagga --localstatedir=/var/run/quagga --libdir=$(FS_MOUNT_DIR)/usr/lib --enable-exampledir=$(FS_MOUNT_DIR)/etc/quagga
+QUAGGA_CONFIGURE_AMD64=SNMP_LIBDIR="$(realpath $(QUAGGA_DIR))/libdev/usr/lib" CFLAGS="-m64" LDFLAGS="-m64" CPPFLAGS="-I $(realpath $(QUAGGA_DIR))/include" ./configure  --enable-vtysh --enable-mpls --enable-isisd --enable-snmp --enable-opaque-lsa --enable-ospf-te --enable-multipath=50 --enable-isis-topology --prefix=$(FS_MOUNT_DIR) --sysconfdir=/etc/quagga --localstatedir=/var/run/quagga --libdir=$(FS_MOUNT_DIR)/usr/lib --enable-exampledir=$(FS_MOUNT_DIR)/etc/quagga
+QUAGGA_MAKE=$(MAKE) -C $(QUAGGA_DIR)
+QUAGGA_MAKE_INSTALL=$(SUDO_PFX)$(QUAGGA_MAKE) install$(SUDO_SFX)
+
+QUAGGA_DEV_PACKAGES=pool/main/n/net-snmp/libsnmp15_5.4.1~dfsg-11_$(SUBARCH).deb pool/main/n/net-snmp/libsnmp-dev_5.4.1~dfsg-11_$(SUBARCH).deb
+
+
+
+install-all: ebtables-mpls-install iproute-mpls-install iptables-mpls-install quagga-mpls-install
+compile-all: ebtables-mpls iproute-mpls iptables-mpls quagga-mpls
+
+
+############################################
+# EBTABLES
+############################################
+
+.PHONY: ebtables-mpls-install
+.SILENT: ebtables-mpls-install
+ebtables-mpls-install: ebtables-mpls
+	$(MOUNT_FS)
+ifeq ($(SUBARCH),amd64)
+	+$(EBTABLES_MAKE_INSTALL_AMD64) >/dev/null
+else ifeq ($(SUBARCH),i386)
+	+$(EBTABLES_MAKE_INSTALL_I386) >/dev/null
+endif
+
+.PHONY: ebtables-mpls
+.SILENT: ebtables-mpls
+ebtables-mpls: $(EBTABLES_DIR)
+	echo "Compiling ebtables..."
+ifeq ($(SUBARCH),amd64)
+	+$(EBTABLES_MAKE_AMD64) >/dev/null
+else ifeq ($(SUBARCH),i386)
+	+$(EBTABLES_MAKE_I386) >/dev/null
+else
+	echo "Sorry, building ebtables for architecture $(SUBARCH) is not supported."
+	exit 1
+endif
+
+$(EBTABLES_DIR): $(EBTABLES_PACKAGE)
+	tar xzf $(EBTABLES_PACKAGE)
+	cd $(EBTABLES_DIR); patch -p1 < ../../ebtables-mpls.diff
+
+$(EBTABLES_PACKAGE):
+	wget $(EBTABLES_PACKAGE_URL)
+
+
+
+
+############################################
+# IPROUTE
+############################################
+
+.PHONY: iproute-mpls-install
+.SILENT: iproute-mpls-install
+iproute-mpls-install: iproute-mpls
+	$(MOUNT_FS)
+ifeq ($(SUBARCH),amd64)
+	+$(IPROUTE_MAKE_INSTALL_AMD64) >/dev/null
+else ifeq ($(SUBARCH),i386)
+	+$(IPROUTE_MAKE_INSTALL_I386) >/dev/null
+endif
+
+.PHONY: iproute-mpls
+.SILENT: iproute-mpls
+iproute-mpls: $(IPROUTE_DIR) $(IPROUTE_DIR)/libdev
+	echo "Compiling iproute..."
+ifeq ($(SUBARCH),amd64)
+	+$(IPROUTE_MAKE_AMD64) >/dev/null
+else ifeq ($(SUBARCH),i386)
+	+$(IPROUTE_MAKE_I386) >/dev/null
+else
+	echo "Sorry, building iproute for architecture $(SUBARCH) is not supported."
+	exit 1
+endif
+
+$(IPROUTE_DIR): $(IPROUTE_PACKAGE)
+	mkdir -p $(IPROUTE_DIR)
+	tar -C $(IPROUTE_DIR) -xf $(IPROUTE_PACKAGE)
+	cd $(IPROUTE_DIR); patch -p1 <../../iproute2-mpls.diff
+
+.SILENT: $(notdir $(IPROUTE_DEV_PACKAGES))
+$(notdir $(IPROUTE_DEV_PACKAGES)):
+	wget $(DEBIAN_MIRROR)/$(filter %/$@,$(IPROUTE_DEV_PACKAGES))
+
+.SILENT: $(IPROUTE_DIR)/libdev
+$(IPROUTE_DIR)/libdev: $(notdir $(IPROUTE_DEV_PACKAGES))
+	mkdir -p $(IPROUTE_DIR)/libdev
+	for PACKAGE in $?; do \
+		dpkg-deb -x $${PACKAGE} $(IPROUTE_DIR)/libdev; \
+	done
+	# Make sure the $(IPROUTE_DIR)/libdev dir is newer than the prerequisites
+	touch $(IPROUTE_DIR)/libdev
+
+$(IPROUTE_PACKAGE):
+	wget $(IPROUTE_PACKAGE_URL)
+
+
+############################################
+# IPTABLES
+############################################
+
+.PHONY: iptables-mpls-install
+.SILENT: iptables-mpls-install
+iptables-mpls-install: iptables-mpls
+	$(MOUNT_FS)
+	+$(IPTABLES_MAKE_INSTALL) >/dev/null
+
+.PHONY: iptables-mpls
+.SILENT: iptables-mpls
+iptables-mpls: $(IPTABLES_DIR)
+	echo "Compiling iptables..."
+ifneq ($(SUBARCH),amd64)
+ifneq ($(SUBARCH),i386)
+	echo "Sorry, building iptables for architecture $(SUBARCH) is not supported."
+	exit 1
+endif
+endif
+	cd $(IPTABLES_DIR); $(IPTABLES_CONFIGURE) >/dev/null
+	+$(IPTABLES_MAKE) >/dev/null
+
+$(IPTABLES_DIR): $(IPTABLES_PACKAGE)
+	tar -xf $(IPTABLES_PACKAGE)
+	cd $(IPTABLES_DIR); patch -p1 <../../iptables-mpls.diff
+
+$(IPTABLES_PACKAGE):
+	wget $(IPTABLES_PACKAGE_URL)
+
+
+############################################
+# QUAGGA
+############################################
+
+.PHONY: quagga-mpls-install
+.SILENT: quagga-mpls-install
+quagga-mpls-install: quagga-mpls
+	$(MOUNT_FS)
+ifneq ($(SUBARCH),amd64)
+ifneq ($(SUBARCH),i386)
+	echo "Sorry, building quagga for architecture $(SUBARCH) is not supported."
+	exit 1
+endif
+endif
+	$(QUAGGA_MAKE_INSTALL) >/dev/null
+
+.PHONY: quagga-mpls
+.SILENT: quagga-mpls
+quagga-mpls: $(QUAGGA_DIR) $(QUAGGA_DIR)/libdev
+	echo "Compiling quagga..."
+	-cd $(QUAGGA_DIR); autoreconf >/dev/null 2>&1
+ifeq ($(SUBARCH),amd64)
+	cd $(QUAGGA_DIR); $(QUAGGA_CONFIGURE_AMD64) >/dev/null
+else ifeq ($(SUBARCH),i386)
+	cd $(QUAGGA_DIR); $(QUAGGA_CONFIGURE_I386) >/dev/null
+else
+	echo "Sorry, building quagga for architecture $(SUBARCH) is not supported."
+	exit 1
+endif
+	+$(QUAGGA_MAKE) >/dev/null
+
+$(QUAGGA_DIR): $(QUAGGA_PACKAGE)
+	tar xzf $(QUAGGA_PACKAGE)
+	cd $(QUAGGA_DIR); patch -p1 <../../quagga-mpls.diff
+
+.SILENT: $(notdir $(QUAGGA_DEV_PACKAGES))
+$(notdir $(QUAGGA_DEV_PACKAGES)):
+	wget $(DEBIAN_MIRROR)/$(filter %/$@,$(QUAGGA_DEV_PACKAGES))
+
+.SILENT: $(QUAGGA_DIR)/libdev
+$(QUAGGA_DIR)/libdev: $(notdir $(QUAGGA_DEV_PACKAGES))
+	mkdir -p $(QUAGGA_DIR)/libdev
+	for PACKAGE in $?; do \
+		dpkg-deb -x $${PACKAGE} $(QUAGGA_DIR)/libdev; \
+	done
+	# Make sure the $(QUAGGA_DIR)/libdev dir is newer than the prerequisites
+	touch $(QUAGGA_DIR)/libdev
+
+$(QUAGGA_PACKAGE):
+	wget $(QUAGGA_PACKAGE_URL)
+
+
+
+
+
+
+.PHONY: clean-downloads
+clean-downloads:
+	rm -f $(EBTABLES_PACKAGE) $(IPROUTE_PACKAGE) $(notdir $(IPROUTE_DEV_PACKAGES)) $(IPTABLES_PACKAGE) $(QUAGGA_PACKAGE) $(notdir $(QUAGGA_DEV_PACKAGES))
+
+.PHONY: clean-all
+clean-all: clean clean-downloads
+
+.PHONY: clean
+clean:
+	rm -fr $(EBTABLES_DIR) $(IPROUTE_DIR) $(IPTABLES_DIR) $(QUAGGA_DIR)
+

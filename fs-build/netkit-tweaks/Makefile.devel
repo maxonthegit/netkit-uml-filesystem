@@ -1,0 +1,39 @@
+#     Copyright 2007-2008 Massimo Rimondini - Computer Networks Research Group,
+#     Roma Tre University.
+#
+#     This file is part of Netkit.
+#
+#     Netkit is free software: you can redistribute it and/or modify it under
+#     the terms of the GNU General Public License as published by the Free
+#     Software Foundation, either version 3 of the License, or (at your option)
+#     any later version.
+#
+#     Netkit is distributed in the hope that it will be useful, but WITHOUT ANY
+#     WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+#     FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+#     details.
+#
+#     You should have received a copy of the GNU General Public License along
+#     with Netkit.  If not, see <http://www.gnu.org/licenses/>.
+
+
+# Don't do anything by default. This makefile is only intended for invocation
+# from the filesystem building makefile.
+default:
+
+.PHONY: netkit-tweaks
+netkit-tweaks: file-tweaks script-tweaks
+
+.PHONY: file-tweaks
+.SILENT: file-tweaks
+file-tweaks:
+	echo "Copying Netkit-specific files..."
+	$(MOUNT_FS)
+	tar -C filesystem-tweaks --exclude=CVS --exclude=.svn -c . | $(SUDO_PFX)tar -C $(FS_MOUNT_DIR) -x$(SUDO_SFX)
+
+.PHONY: script-tweaks
+.SILENT: script-tweaks
+script-tweaks: file-tweaks
+	echo "Applying Netkit tweaks..."
+	for SCRIPT in tweaks.d/[0-9]*; do $${SCRIPT} || exit 1; done
+

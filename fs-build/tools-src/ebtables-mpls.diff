@@ -1,0 +1,562 @@
+===============================================================================
+
+This patch turns the standard ebtables implementation into one that supports the
+MPLS framework implemented by James Leu, Ramon Casellas, and David S. Miller.
+
+TECHNICAL INFORMATION:
+
+ebtables-mpls version 2.0.8-1, checked out from the MPLS project's P4 repository
+on Oct 25th, 2008.
+
+Applies to ebtables 2.0.8-1, available from:
+http://downloads.sourceforge.net/ebtables/ebtables-v2.0.8-1.tar.gz?download
+
+The patch has been obtained by following this procedure:
+ 1) First of all, Redhat-specific files have been removed from the package.
+ 2) Then, the following files have been copied from a 2.6.26.5 Linux kernel
+ tree, patched with MPLS Linux 1.962, to the include/linux directory of the
+ package:
+    mpls.h
+    netfilter/xt_mpls.h
+    if_ether.h
+ 3) The Makefile has been changed to invoke the $(LD) linker with proper
+ $(LDFLAGS).
+ 4) The resulting package has been diff'ed against a clean ebtables 2.0.8-1.
+
+===============================================================================
+
+diff -Naur ebtables-v2.0.8-1/extensions/ebt_mpls.c ebtables-v2.0.8-1-mpls/extensions/ebt_mpls.c
+--- ebtables-v2.0.8-1/extensions/ebt_mpls.c	1970-01-01 01:00:00.000000000 +0100
++++ ebtables-v2.0.8-1-mpls/extensions/ebt_mpls.c	2008-11-02 11:31:29.000000000 +0100
+@@ -0,0 +1,101 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <getopt.h>
++#include "../include/ebtables_u.h"
++#include <linux/netfilter/xt_mpls.h>
++#define __KERNEL__
++#include <linux/mpls.h>
++#undef __KERNEL__
++
++#define MPLS_TARGET '1'
++static struct option opts[] =
++{
++	{ "nhlfe", required_argument, 0, MPLS_TARGET },
++	{ 0 }
++};
++
++static void print_help()
++{
++	printf(
++	"mpls option:\n"
++	" --nhlfe value   : Index of MPLS NHLFE to map traffic to\n");
++}
++
++static void init(struct ebt_entry_target *target)
++{
++}
++
++static int parse(int c, char **argv, int argc,
++   const struct ebt_u_entry *entry, unsigned int *flags,
++   struct ebt_entry_target **target)
++{
++	struct xt_mpls_target_info *mplsinfo =
++	   (struct xt_mpls_target_info *)(*target)->data;
++	char *end;
++
++	switch (c) {
++	case MPLS_TARGET:
++		if (*flags) {
++			ebt_print_error2("mpls target: Can't specify --nhlfe twice");
++		}
++
++		mplsinfo->key = strtoul(optarg, &end, 0);
++		if (*end != '\0' || end == optarg)
++			ebt_print_error2("Bad MPLS key `%s'", optarg);
++		*flags = 1;
++		break;
++	default:
++		return 0;
++	}
++	return 1;
++}
++
++static void final_check(const struct ebt_u_entry *entry,
++   const struct ebt_entry_target *target, const char *name,
++   unsigned int hookmask, unsigned int time)
++{
++	struct xt_mpls_target_info *mplsinfo =
++	   (struct xt_mpls_target_info *)target->data;
++
++	if (!mplsinfo->key)
++		ebt_print_error("mpls target: Parameter --nhlfe is required");
++}
++
++static void print(const struct ebt_u_entry *entry,
++   const struct ebt_entry_target *target)
++{
++	struct xt_mpls_target_info *mplsinfo =
++	   (struct xt_mpls_target_info *)target->data;
++
++	printf(" --nhlfe 0x%x", mplsinfo->key);
++}
++
++static int compare(const struct ebt_entry_target *t1,
++   const struct ebt_entry_target *t2)
++{
++	struct xt_mpls_target_info *mplsinfo1 =
++	   (struct xt_mpls_target_info *)t1->data;
++	struct xt_mpls_target_info *mplsinfo2 =
++	   (struct xt_mpls_target_info *)t2->data;
++
++	return mplsinfo1->key == mplsinfo2->key;
++}
++
++static struct ebt_u_target mpls_target =
++{
++	.name		= "mpls",
++	.size		= sizeof(struct xt_mpls_target_info),
++	.help		= print_help,
++	.init		= init,
++	.parse		= parse,
++	.final_check	= final_check,
++	.print		= print,
++	.compare	= compare,
++	.extra_ops	= opts,
++};
++
++void _init(void)
++{
++	ebt_register_target(&mpls_target);
++}
+diff -Naur ebtables-v2.0.8-1/extensions/Makefile ebtables-v2.0.8-1-mpls/extensions/Makefile
+--- ebtables-v2.0.8-1/extensions/Makefile	2007-05-28 18:42:08.000000000 +0200
++++ ebtables-v2.0.8-1-mpls/extensions/Makefile	2008-11-02 11:31:29.000000000 +0100
+@@ -1,7 +1,7 @@
+ #! /usr/bin/make
+ 
+ EXT_FUNC+=802_3 nat arp arpreply ip standard log redirect vlan mark_m mark \
+-          pkttype stp among limit ulog
++          pkttype stp among limit ulog mpls
+ EXT_TABLES+=filter nat broute
+ EXT_OBJS+=$(foreach T,$(EXT_FUNC), extensions/ebt_$(T).o)
+ EXT_OBJS+=$(foreach T,$(EXT_TABLES), extensions/ebtable_$(T).o)
+@@ -11,13 +11,13 @@
+ EXT_LIBSI+=$(foreach T,$(EXT_TABLES), -lebtable_$(T))
+ 
+ extensions/ebt_%.so: extensions/ebt_%.o
+-	$(CC) -shared -o $@ -lc $< -nostartfiles
++	$(CC) $(CFLAGS) -shared -o $@ -lc $< -nostartfiles
+ 
+ extensions/libebt_%.so: extensions/ebt_%.so
+ 	mv $< $@
+ 
+ extensions/ebtable_%.so: extensions/ebtable_%.o
+-	$(CC) -shared -o $@ -lc $< -nostartfiles
++	$(CC) $(CFLAGS) -shared -o $@ -lc $< -nostartfiles
+ 
+ extensions/libebtable_%.so: extensions/ebtable_%.so
+ 	mv $< $@
+diff -Naur ebtables-v2.0.8-1/include/linux/if_ether.h ebtables-v2.0.8-1-mpls/include/linux/if_ether.h
+--- ebtables-v2.0.8-1/include/linux/if_ether.h	2007-05-28 18:42:08.000000000 +0200
++++ ebtables-v2.0.8-1-mpls/include/linux/if_ether.h	2008-11-02 11:31:29.000000000 +0100
+@@ -90,6 +90,7 @@
+ #define ETH_P_WAN_PPP   0x0007          /* Dummy type for WAN PPP frames*/
+ #define ETH_P_PPP_MP    0x0008          /* Dummy type for PPP MP frames */
+ #define ETH_P_LOCALTALK 0x0009		/* Localtalk pseudo type 	*/
++#define ETH_P_CAN	0x000C		/* Controller Area Network      */
+ #define ETH_P_PPPTALK	0x0010		/* Dummy type for Atalk over PPP*/
+ #define ETH_P_TR_802_2	0x0011		/* 802.2 frames 		*/
+ #define ETH_P_MOBITEX	0x0015		/* Mobitex (kaz@cafe.net)	*/
+@@ -117,9 +118,22 @@
+ 	return (struct ethhdr *)skb_mac_header(skb);
+ }
+ 
++int eth_header_parse(const struct sk_buff *skb, unsigned char *haddr);
++
+ #ifdef CONFIG_SYSCTL
+ extern struct ctl_table ether_table[];
+ #endif
++
++extern ssize_t sysfs_format_mac(char *buf, const unsigned char *addr, int len);
++
++/*
++ *	Display a 6 byte device address (MAC) in a readable format.
++ */
++extern char *print_mac(char *buf, const unsigned char *addr);
++#define MAC_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
++#define MAC_BUF_SIZE	18
++#define DECLARE_MAC_BUF(var) char var[MAC_BUF_SIZE] __maybe_unused
++
+ #endif
+ 
+ #endif	/* _LINUX_IF_ETHER_H */
+diff -Naur ebtables-v2.0.8-1/include/linux/mpls.h ebtables-v2.0.8-1-mpls/include/linux/mpls.h
+--- ebtables-v2.0.8-1/include/linux/mpls.h	1970-01-01 01:00:00.000000000 +0100
++++ ebtables-v2.0.8-1-mpls/include/linux/mpls.h	2008-11-02 11:31:29.000000000 +0100
+@@ -0,0 +1,248 @@
++/*****************************************************************************
++ * MPLS
++ *      An implementation of the MPLS (MultiProtocol Label
++ *      Switching Architecture) for Linux.
++ *
++ * Authors:
++ *          James Leu        <jleu@mindspring.com>
++ *          Ramon Casellas   <casellas@infres.enst.fr>
++ *
++ *   (c) 1999-2004   James Leu        <jleu@mindspring.com>
++ *   (c) 2003-2004   Ramon Casellas   <casellas@infres.enst.fr>
++ *
++ * include/linux/mpls.h
++ *      Data types and structs used by userspace programs to access MPLS
++ *      forwarding. Most interface with the MPLS subsystem is IOCTL based
++ *
++ *      This program is free software; you can redistribute it and/or
++ *      modify it under the terms of the GNU General Public License
++ *      as published by the Free Software Foundation; either version
++ *      2 of the License, or (at your option) any later version.
++ ****************************************************************************/
++
++#ifndef _LINUX_MPLS_H_
++#define _LINUX_MPLS_H_
++
++#ifdef __KERNEL__
++#include <linux/socket.h>
++#include <linux/if.h>
++#else
++#include <sys/socket.h>
++#include <linux/types.h>
++#include <net/if.h>
++#endif
++
++#define MPLS_NUM_OPS		8
++
++#define MPLS_LINUX_VERSION	0x01090602
++
++#define	MPLS_GRP_ILM	1
++#define	MPLS_GRP_NHLFE	2
++#define	MPLS_GRP_XC	4
++#define	MPLS_GRP_LABELSPACE 8
++
++#define MPLS_IPV4_EXPLICIT_NULL	0       /* only valid as sole label stack entry
++					   Pop label and send to IPv4 stack */
++#define MPLS_ROUTER_ALERT	1       /* anywhere except bottom, packet it is
++					   forwared to a software module
++					   determined by the next label,
++					   if the packet is forwarded, push this
++					   label back on */
++#define MPLS_IPV6_EXPLICIT_NULL	2       /* only valid as sole label stack entry
++					   Pop label and send to IPv6 stack */
++#define MPLS_IMPLICIT_NULL	3       /* a LIB with this, signifies to pop
++					   the next label and use that */
++
++#define MPLS_CHANGE_MTU		0x01
++#define MPLS_CHANGE_PROP_TTL	0x02
++#define MPLS_CHANGE_INSTR	0x04
++#define MPLS_CHANGE_PROTO	0x10
++
++enum mpls_dir {
++	MPLS_IN = 0x10,
++	MPLS_OUT = 0x20
++};
++
++enum mpls_opcode_enum {
++	MPLS_OP_NOP = 0x00,
++	MPLS_OP_POP,
++	MPLS_OP_PEEK,
++	MPLS_OP_PUSH,
++	MPLS_OP_DLV,
++	MPLS_OP_FWD,
++	MPLS_OP_NF_FWD,
++	MPLS_OP_DS_FWD,
++	MPLS_OP_EXP_FWD,
++	MPLS_OP_SET,
++	MPLS_OP_SET_RX,
++	MPLS_OP_SET_TC,
++	MPLS_OP_SET_DS,
++	MPLS_OP_SET_EXP,
++	MPLS_OP_EXP2TC,
++	MPLS_OP_EXP2DS,
++	MPLS_OP_TC2EXP,
++	MPLS_OP_DS2EXP,
++	MPLS_OP_NF2EXP,
++	MPLS_OP_SET_NF,
++	MPLS_OP_MAX
++};
++
++enum mpls_label_type_enum {
++	MPLS_LABEL_GEN = 1,
++	MPLS_LABEL_ATM,
++	MPLS_LABEL_FR,
++	MPLS_LABEL_KEY
++};
++
++struct mpls_label_atm {
++	u_int16_t  mla_vpi;
++	u_int16_t  mla_vci;
++};
++
++struct mpls_label {
++	enum mpls_label_type_enum ml_type;
++	union {
++		u_int32_t ml_key;
++		u_int32_t ml_gen;
++		u_int32_t ml_fr;
++		struct mpls_label_atm ml_atm;
++	} u;
++	int ml_index;
++};
++
++struct mpls_in_label_req {
++	unsigned int      mil_proto;
++	struct mpls_label mil_label;
++	unsigned char     mil_change_flag;
++};
++
++#define MPLS_LABELSPACE_MAX	255
++
++struct mpls_labelspace_req {
++	int mls_ifindex;                  /* Index to the MPLS-enab. interface*/
++	int mls_labelspace;               /* Labelspace IN/SET -- OUT/GET     */
++};
++
++struct mpls_nexthop_info {
++	unsigned int    mni_if;
++	struct sockaddr mni_addr;
++};
++
++struct mpls_out_label_req {
++	struct mpls_label mol_label;
++	u_int32_t         mol_mtu;
++	int8_t            mol_propagate_ttl;
++	unsigned char     mol_change_flag;
++};
++
++struct mpls_xconnect_req {
++	struct mpls_label mx_in;
++	struct mpls_label mx_out;
++};
++
++struct mpls_tunnel_req {
++	char mt_ifname[IFNAMSIZ];
++	unsigned int mt_nhlfe_key;
++};
++
++#define MPLS_NFMARK_NUM 64
++
++struct mpls_nfmark_fwd {
++	unsigned int nf_key[MPLS_NFMARK_NUM];
++	unsigned short nf_mask;
++};
++
++#define MPLS_DSMARK_NUM 64
++
++struct mpls_dsmark_fwd {
++	unsigned int df_key[MPLS_DSMARK_NUM];
++	unsigned char df_mask;
++};
++
++#define MPLS_TCINDEX_NUM 64
++
++struct mpls_tcindex_fwd {
++	unsigned int tc_key[MPLS_TCINDEX_NUM];
++	unsigned short tc_mask;
++};
++
++#define MPLS_EXP_NUM 8
++
++struct mpls_exp_fwd {
++	unsigned int ef_key[MPLS_EXP_NUM];
++};
++
++struct mpls_exp2tcindex {
++	unsigned short e2t[MPLS_EXP_NUM];
++};
++
++struct mpls_exp2dsmark {
++	unsigned char e2d[MPLS_EXP_NUM];
++};
++
++struct mpls_tcindex2exp {
++	unsigned char t2e_mask;
++	unsigned char t2e[MPLS_TCINDEX_NUM];
++};
++
++struct mpls_dsmark2exp {
++	unsigned char d2e_mask;
++	unsigned char d2e[MPLS_DSMARK_NUM];
++};
++
++struct mpls_nfmark2exp {
++	unsigned char n2e_mask;
++	unsigned char n2e[MPLS_NFMARK_NUM];
++};
++
++struct mpls_instr_elem {
++	unsigned short mir_opcode;
++	unsigned char mir_direction;
++	union {
++		struct mpls_label        push;
++		struct mpls_label        fwd;
++		struct mpls_nfmark_fwd   nf_fwd;
++		struct mpls_dsmark_fwd   ds_fwd;
++		struct mpls_exp_fwd      exp_fwd;
++		struct mpls_nexthop_info set;
++		unsigned int             set_rx;
++		unsigned short           set_tc;
++		unsigned short           set_ds;
++		unsigned char            set_exp;
++		struct mpls_exp2tcindex  exp2tc;
++		struct mpls_exp2dsmark   exp2ds;
++		struct mpls_tcindex2exp  tc2exp;
++		struct mpls_dsmark2exp   ds2exp;
++		struct mpls_nfmark2exp   nf2exp;
++		unsigned long            set_nf;
++	} mir_data;
++};
++
++/* Standard shortcuts */
++#define mir_push       mir_data.push
++#define mir_fwd        mir_data.fwd
++#define mir_nf_fwd     mir_data.nf_fwd
++#define mir_ds_fwd     mir_data.ds_fwd
++#define mir_exp_fwd    mir_data.exp_fwd
++#define mir_set        mir_data.set
++#define mir_set_rx     mir_data.set_rx
++#define mir_set_tc     mir_data.set_tc
++#define mir_set_tx     mir_data.set_tx
++#define mir_set_ds     mir_data.set_ds
++#define mir_set_exp    mir_data.set_exp
++#define mir_set_nf     mir_data.set_nf
++#define mir_exp2tc     mir_data.exp2tc
++#define mir_exp2ds     mir_data.exp2ds
++#define mir_tc2exp     mir_data.tc2exp
++#define mir_ds2exp     mir_data.ds2exp
++#define mir_nf2exp     mir_data.nf2exp
++
++struct mpls_instr_req {
++	struct mpls_instr_elem       mir_instr[MPLS_NUM_OPS];
++	unsigned char                mir_instr_length;
++	unsigned char                mir_direction;
++	int                          mir_index;
++	struct mpls_label            mir_label;
++};
++
++#endif
+diff -Naur ebtables-v2.0.8-1/include/linux/netfilter/xt_mpls.h ebtables-v2.0.8-1-mpls/include/linux/netfilter/xt_mpls.h
+--- ebtables-v2.0.8-1/include/linux/netfilter/xt_mpls.h	1970-01-01 01:00:00.000000000 +0100
++++ ebtables-v2.0.8-1-mpls/include/linux/netfilter/xt_mpls.h	2008-11-02 11:31:29.000000000 +0100
+@@ -0,0 +1,12 @@
++#ifndef _XT_MPLS_H_target
++#define _XT_MPLS_H_target
++
++struct xt_mpls_target_info {
++	u_int32_t key;
++
++	/* only used by the netfilter kernel modules */
++	void *nhlfe;
++	void *proto;
++};
++
++#endif /*_XT_MPLS_H_target */
+diff -Naur ebtables-v2.0.8-1/Makefile ebtables-v2.0.8-1-mpls/Makefile
+--- ebtables-v2.0.8-1/Makefile	2007-05-28 18:42:08.000000000 +0200
++++ ebtables-v2.0.8-1-mpls/Makefile	2008-11-02 11:31:29.000000000 +0100
+@@ -15,13 +15,8 @@
+ SYSCONFIGDIR:=/etc/sysconfig
+ DESTDIR:=
+ 
+-# include DESTDIR param
+-override LIBDIR:=$(DESTDIR)$(LIBDIR)/$(PROGNAME)
+-override MANDIR:=$(DESTDIR)$(MANDIR)
+-override BINDIR:=$(DESTDIR)$(BINDIR)
+-override ETCDIR:=$(DESTDIR)$(ETCDIR)
+-override INITDIR:=$(DESTDIR)$(INITDIR)
+-override SYSCONFIGDIR:=$(DESTDIR)$(SYSCONFIGDIR)
++# include PROGNAME in LIBDIR
++override LIBDIR:=$(LIBDIR)/$(PROGNAME)
+ 
+ 
+ CFLAGS:=-Wall -Wunused
+@@ -94,7 +89,7 @@
+ 
+ .PHONY: libebtc
+ libebtc: $(OBJECTS2)
+-	$(LD) -shared -soname libebtc.so -o libebtc.so -lc $(OBJECTS2)
++	$(LD) $(LDFLAGS) -shared -soname libebtc.so -o libebtc.so -lc $(OBJECTS2)
+ 
+ ebtables: $(OBJECTS) ebtables-standalone.o libebtc
+ 	$(CC) $(CFLAGS) $(CFLAGS_SH_LIB) -o $@ ebtables-standalone.o -I$(KERNEL_INCLUDES) -L. -Lextensions -lebtc $(EXT_LIBSI) \
+@@ -163,34 +158,34 @@
+ .PHONY: scripts
+ scripts: ebtables-save ebtables.sysv ebtables-config
+ 	cat ebtables-save | sed 's/__EXEC_PATH__/$(tmp1)/g' > ebtables-save_
+-	install -m 0755 -o root -g root ebtables-save_ $(BINDIR)/ebtables-save
++	install -m 0755 ebtables-save_ $(DESTDIR)$(BINDIR)/ebtables-save
+ 	cat ebtables.sysv | sed 's/__EXEC_PATH__/$(tmp1)/g' | sed 's/__SYSCONFIG__/$(tmp2)/g' > ebtables.sysv_
+-	install -m 0755 -o root -g root ebtables.sysv_ $(INITDIR)/ebtables
++	install -m 0755 ebtables.sysv_ $(DESTDIR)$(INITDIR)/ebtables
+ 	cat ebtables-config | sed 's/__SYSCONFIG__/$(tmp2)/g' > ebtables-config_
+-	install -m 0600 -o root -g root ebtables-config_ $(SYSCONFIGDIR)/ebtables-config
++	install -m 0600 ebtables-config_ $(DESTDIR)$(SYSCONFIGDIR)/ebtables-config
+ 	rm -f ebtables-save_ ebtables.sysv_ ebtables-config_
+ 
+ $(MANDIR)/man8/ebtables.8: ebtables.8
+-	mkdir -p $(@D)
++	mkdir -p $(DESTDIR)$(@D)
+ 	sed 's/$$(VERSION)/$(PROGVERSION)/' ebtables.8 | sed 's/$$(DATE)/$(PROGDATE)/' > ebtables.8_
+-	install -m 0644 -o root -g root ebtables.8_ $@
++	install -m 0644 ebtables.8_ $(DESTDIR)$@
+ 	rm -f ebtables.8_
+ 
+ $(ETHERTYPESFILE): ethertypes
+-	mkdir -p $(@D)
+-	install -m 0644 -o root -g root $< $@
++	mkdir -p $(DESTDIR)$(@D)
++	install -m 0644 $< $(DESTDIR)$@
+ 
+ .PHONY: exec
+ exec: ebtables ebtables-restore
+-	mkdir -p $(BINDIR)
+-	install -m 0755 -o root -g root $(PROGNAME) $(BINDIR)/$(PROGNAME)
+-	install -m 0755 -o root -g root ebtables-restore $(BINDIR)/ebtables-restore
++	mkdir -p $(DESTDIR)$(BINDIR)
++	install -m 0755 $(PROGNAME) $(DESTDIR)$(BINDIR)/$(PROGNAME)
++	install -m 0755 ebtables-restore $(DESTDIR)$(BINDIR)/ebtables-restore
+ 
+ .PHONY: install
+ install: $(MANDIR)/man8/ebtables.8 $(ETHERTYPESFILE) exec scripts
+-	mkdir -p $(LIBDIR)
+-	install -m 0755 extensions/*.so $(LIBDIR)
+-	install -m 0755 *.so $(LIBDIR)
++	mkdir -p $(DESTDIR)$(LIBDIR)
++	install -m 0755 extensions/*.so $(DESTDIR)$(LIBDIR)
++	install -m 0755 *.so $(DESTDIR)$(LIBDIR)
+ 
+ .PHONY: clean
+ clean:
+@@ -208,18 +203,18 @@
+ 	rm -f extensions/ebt_inat.c
+ 	rm -rf $(CVSDIRS)
+ 	mkdir -p include/linux/netfilter_bridge
+-	install -m 0644 -o root -g root \
++	install -m 0644 \
+ 		$(KERNEL_INCLUDES)/linux/netfilter_bridge.h include/linux/
+ # To keep possible compile error complaints about undefined ETH_P_8021Q
+ # off my back
+-	install -m 0644 -o root -g root \
++	install -m 0644 \
+ 		$(KERNEL_INCLUDES)/linux/if_ether.h include/linux/
+-	install -m 0644 -o root -g root \
++	install -m 0644 \
+ 		$(KERNEL_INCLUDES)/linux/types.h include/linux/
+-	install -m 0644 -o root -g root \
++	install -m 0644 \
+ 		$(KERNEL_INCLUDES)/linux/netfilter_bridge/*.h \
+ 		include/linux/netfilter_bridge/
+-	install -m 0644 -o root -g root \
++	install -m 0644 \
+ 		include/ebtables.h include/linux/netfilter_bridge/
+ 	make clean
+ 	touch *

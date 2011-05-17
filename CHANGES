@@ -1,0 +1,121 @@
+F5.2
+   - Installed strace (bug #8).
+   - Fixed some warnings during the startup of virtual machines when using
+     terminals different from xterm (mainly due to improperly handled escape
+     sequences).
+
+F5.1
+  - Resized filesystem image to 10GB.
+  - Documentation about the filesystem, as well as the procedure to build a
+    custom image, have been moved from the netkit-filesystem (7) man page to the
+    README file.
+  - The procedure to resize (enlarge) the filesystem is now described in the
+    README file.
+  - Fixed an error that prevented predefined lab tests to run properly (/sbin/ip
+    could not be located by the netkit-test-phase script).
+  - Fixed an error that prevented virtual machines from automatically shutting
+    down after running tests.
+  - The order of user-defined tests and predefined tests has now been reversed.
+    Also, a sleep has been introduced to run the predefined test after the lab
+    has settled if no user-defined test is found.
+  - Solved permissions problem in importing lab files from the host to the guest:
+    instead of simply preserving the original permissions (which may, for
+    example, allow access only to the current user - in Netkit, root -), now
+    the user's permissions bits are reflected to the group and others.
+  - Created some additional directories (bug #6).
+
+F5.0
+  - The filesystem image has been rebuilt from scratch, thus including the most
+    recent release of each packet.
+  - The filesystem package now contains a lot of additional files that can be
+    used to build a custom Netkit filesystem. Among these, there are patches to
+    MPLS-enable basic routing tools (Quagga, ebtables, iptables, iproute) and a
+    set of makefiles and scripts that automate the process of building a
+    filesystem image. Please refer to the README file before using them.
+  - The contents of the man page netkit-filesystem have been moved to the
+    README file.
+  - The ebtables package is now correctly installed (was broken in F4.0).
+  - Problems in stopping Quagga related daemons have been solved.
+  - Quagga is preconfigured to communicate with the SNMP agent snmpd.
+  - Other problems with keyboard layouts (e.g., misaligned command line when
+    typing accented letters) have been solved.
+  - The vi editor now features a slightly fancier configuration (syntax
+    highlighting, remember last position in file, etc.).
+  - Improved command line completion.
+  - iproute, ebtables, iptables, and quagga are provided both in their
+    MPLS-enabled versions and in their original versions from Debian packages.
+    The latter files are prefixed by the name orig-. Notice that, if you intend
+    to use the plain original versions, you may also need to replace some
+    applicable libraries inside /lib or /usr/lib, which have also been renamed
+    with the orig- prefix.
+  - A password for the root account has been set (it is "root").
+  - The locate database is populated.
+  - Packages arptables, dnsmasq, pdns-recursor, and tunctl have been added.
+  - If a Netkit lab contained a virtual machine whose directory was actually a
+    symbolic link, files were not copied correctly to the virtual machine
+    filesystem. Fixed.
+
+F4.0
+  - Filesystem rebuilt from scratch.
+  - Introduced support for MPLS in system tools and routing daemons.
+  - Recompiled Quagga with SNMP and MPLS support. The vtysh is now supported.
+  - Updated tools to the most recent available ersion at the time of the
+    release.
+  - Installed XORP.
+  - Optimized startup time scripts (and, therefore, startup time).
+  - Made information collected by the default test procedure a bit more
+    significant (sorted outputs, etc.).
+
+F3.0
+  - Renamed the base directory of the filesystem tree from netkit2 to netkit.F3.0
+
+F3.0a
+  - Several packages have been installed and upgraded, including openswan,
+    racoon, ppp, dhcpd, shorewall, ulogd, squid, nmap, ssldump, ettercap, snort,
+    libpam, freeradius, snmp, tcpreplay, tcpreen, smcroute, pimd, mrd6, emcast,
+    atftpd, and tftpd.
+
+F2.2
+  - Cleaned up /etc/hosts (it contained some wrong entries associating 127.0.0.1
+    with "pc1").
+  - Lab .startup files are taken into account even if they are not executable.
+    This impacts the Netkit filesystem because it requires a change in the
+    virtual hosts init scripts.
+  - Boot time scripts processed the lab.conf file improperly. This caused
+    warning messages when using the [mem] parameter or when defining interfaces
+    for virtual hosts having particular names (e.g., containing a dash).
+  - The "expect" package has been installed.
+
+F2.1
+  - Moved the /lib/tls/ directory away (UML does not support Thread Local
+    Storage yet). Its presence caused some tools not to work (e.g., nslookup).
+  - Foreign (i.e., user provided) Netkit kernel modules were properly recognized
+    only if the kernel version matched 2.6.11.7. Fixed.
+
+F2.0 Beta
+  - Virtual machines boot messages have been deeply cleaned up.
+  - Maximum number of days between mounts and maximum number of mounts before
+    filesystem check have both been reset to 0. You won't go through those
+    annoying file system checks any more!
+  - Support for two console terminals is provided.
+  - All console terminals now use automatic login as root. You will no longer
+    have to enter the password hundreds of times when starting your labs...
+  - Filesystem now provides support for kernel modules. That is, it provides a
+    set of modutils to manage modules and some scripts automatically mount a
+    host directory containing kernel modules, if this is found to exist.
+  - Netkit startup scripts have been cleaned up and improved.
+  - Fixed wrong minor number for device /dev/ubd/disc0/part1. Also, the following
+    devices have been created:
+    /dev/ubda
+    /dev/ubda1
+    /dev/ubda2
+    /dev/ubdb
+    /dev/ubdb1
+    /dev/ubdb2
+  - Support for automatically performed lab testing has been introduced.
+  - Static mappings in /etc/hosts and the resolver configuration in
+    /etc/resolv.conf have both been cleaned up.
+  - Default passwords for zebra, bgpd, and ripd have all been set to 'zebra'.
+  - Several tools have been installed and a list of installed packages is now
+    being distributed.
+

@@ -1,0 +1,2030 @@
+===============================================================================
+
+This patch turns the standard iptables implementation into one that supports the
+MPLS framework implemented by James Leu, Ramon Casellas, and David S. Miller.
+
+TECHNICAL INFORMATION:
+
+iptables-mpls version 1.4.1.1, checked out from the MPLS project's P4
+repository on Oct 25th, 2008.
+
+Applies to iptables-1.4.1.1, available from:
+http://www.netfilter.org/projects/iptables/files/iptables-1.4.1.1.tar.bz2
+
+This patch has been obtained using the following procedure:
+ 1) First of all, Redhat-specific files have been removed from the package.
+ 2) Then, the following files have been copied from a 2.6.26.5 Linux kernel
+ tree, patched with MPLS Linux 1.962, to the include/linux directory of the
+ package:
+    mpls.h
+    netfilter/xt_mpls.h
+ 4) The resulting package has been diff'ed against a clean iptables-1.4.1.1.
+
+===============================================================================
+
+
+diff -Naur iptables-1.4.1.1/extensions/GNUmakefile iptables-mpls/extensions/GNUmakefile
+--- iptables-1.4.1.1/extensions/GNUmakefile	1970-01-01 01:00:00.000000000 +0100
++++ iptables-mpls/extensions/GNUmakefile	2008-10-07 15:09:25.000000000 +0200
+@@ -0,0 +1,193 @@
++# -*- Makefile -*-
++
++top_builddir := ..
++builddir     := .
++top_srcdir  := ..
++srcdir      := .
++ksourcedir  := 
++prefix      := /home/max/PERFORCE_TEMP/iptables-mpls/installation
++exec_prefix := ${prefix}
++libdir      := ${exec_prefix}/lib
++libexecdir  := ${exec_prefix}/libexec
++xtlibdir    := ${exec_prefix}/libexec/xtables
++
++CC             := gcc
++CCLD           := ${CC}
++CFLAGS         := -g -O2
++LDFLAGS        := 
++regular_CFLAGS := -D_LARGEFILE_SOURCE=1 -D_LARGE_FILES -D_FILE_OFFSET_BITS=64 	-D_REENTRANT -Wall -Waggregate-return -Wmissing-declarations 	-Wmissing-prototypes -Wredundant-decls -Wshadow -Wstrict-prototypes 	-Winline -pipe 	-DXTABLES_LIBDIR=\"${xtlibdir}\" -DXTABLES_INTERNAL
++kinclude_CFLAGS := 
++
++AM_CFLAGS      := ${regular_CFLAGS} -I${top_builddir}/include -I${top_srcdir}/include ${kinclude_CFLAGS}
++AM_DEPFLAGS     = -Wp,-MMD,$(@D)/.$(@F).d,-MT,$@
++
++ifeq (${V},)
++AM_LIBTOOL_SILENT = --silent
++AM_VERBOSE_CC     = @echo "  CC      " $@;
++AM_VERBOSE_CCLD   = @echo "  CCLD    " $@;
++AM_VERBOSE_CXX    = @echo "  CXX     " $@;
++AM_VERBOSE_CXXLD  = @echo "  CXXLD   " $@;
++AM_VERBOSE_AR     = @echo "  AR      " $@;
++AM_VERBOSE_GEN    = @echo "  GEN     " $@;
++endif
++
++#
++#	Wildcard module list
++#
++pfx_build_mod := $(patsubst ${srcdir}/libxt_%.c,%,$(wildcard ${srcdir}/libxt_*.c))
++pf4_build_mod := $(patsubst ${srcdir}/libipt_%.c,%,$(wildcard ${srcdir}/libipt_*.c))
++pf6_build_mod := $(patsubst ${srcdir}/libip6t_%.c,%,$(wildcard ${srcdir}/libip6t_*.c))
++pfx_build_mod := $(filter-out ,${pfx_build_mod})
++pf4_build_mod := $(filter-out ,${pf4_build_mod})
++pf6_build_mod := $(filter-out ,${pf6_build_mod})
++pfx_objs      := $(patsubst %,libxt_%.o,${pfx_build_mod})
++pf4_objs      := $(patsubst %,libipt_%.o,${pf4_build_mod})
++pf6_objs      := $(patsubst %,libip6t_%.o,${pf6_build_mod})
++pfx_solibs    := $(patsubst %,libxt_%.so,${pfx_build_mod})
++pf4_solibs    := $(patsubst %,libipt_%.so,${pf4_build_mod})
++pf6_solibs    := $(patsubst %,libip6t_%.so,${pf6_build_mod})
++
++
++#
++# Building blocks
++#
++targets := libext4.a libext6.a matches4.man matches6.man \
++           targets4.man targets6.man
++targets_install :=
++# libext4_objs := ${pfx_objs} ${pf4_objs}
++# libext6_objs := ${pfx_objs} ${pf6_objs}
++ targets += ${pfx_solibs} ${pf4_solibs} ${pf6_solibs}
++ targets_install += ${pfx_solibs} ${pf4_solibs} ${pf6_solibs}
++
++.SECONDARY:
++
++.PHONY: all install clean distclean FORCE
++
++all: ${targets}
++
++install: ${targets_install}
++	@mkdir -p "${DESTDIR}${xtlibdir}";
++	if test -n "${targets_install}"; then install -pm0755 $^ "${DESTDIR}${xtlibdir}/"; fi;
++
++clean:
++	rm -f *.o *.oo *.so *.a {matches,targets}[46].man initext4.c initext6.c;
++
++distclean: clean
++	rm -f .*.d .*.dd;
++
++init%.o: ${srcdir}/init%.c
++	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=$*_init ${CFLAGS} -o $@ -c $<;
++
++-include .*.d
++
++
++#
++#	Shared libraries
++#
++lib%.so: lib%.oo
++	${AM_VERBOSE_CCLD} ${CCLD} ${AM_LDFLAGS} -shared ${LDFLAGS} -o $@ $<;
++
++lib%.oo: ${srcdir}/lib%.c
++	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=lib$*_init -DPIC -fPIC ${CFLAGS} -o $@ -c $<;
++
++
++#
++#	Static bits
++#
++#	If static building is disabled, libext*.a will still be generated,
++#	but will be empty. This is good since we can do with less case
++#	handling code in the Makefiles.
++#
++lib%.o: ${srcdir}/lib%.c
++	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -DNO_SHARED_LIBS=1 -D_INIT=lib$*_init ${CFLAGS} -o $@ -c $<;
++
++libext4.a: initext4.o ${libext4_objs}
++	${AM_VERBOSE_AR} ${AR} crs $@ $^;
++
++libext6.a: initext6.o ${libext6_objs}
++	${AM_VERBOSE_AR} ${AR} crs $@ $^;
++
++initext_func  := $(addprefix xt_,${pfx_build_mod}) $(addprefix ipt_,${pf4_build_mod})
++initext6_func := $(addprefix xt_,${pfx_build_mod}) $(addprefix ip6t_,${pf6_build_mod})
++
++.initext4.dd: FORCE
++	@echo "${initext_func}" >$@.tmp; \
++	cmp -s $@ $@.tmp || mv $@.tmp $@; \
++	rm -f $@.tmp;
++
++.initext6.dd: FORCE
++	@echo "${initext6_func}" >$@.tmp; \
++	cmp -s $@ $@.tmp || mv $@.tmp $@; \
++	rm -f $@.tmp;
++
++initext4.c: .initext4.dd
++	${AM_VERBOSE_GEN}
++	@( \
++	echo "" >$@; \
++	for i in ${initext_func}; do \
++		echo "extern void lib$${i}_init(void);" >>$@; \
++	done; \
++	echo "void init_extensions(void);" >>$@; \
++	echo "void init_extensions(void)" >>$@; \
++	echo "{" >>$@; \
++	for i in ${initext_func}; do \
++		echo  " ""lib$${i}_init();" >>$@; \
++	done; \
++	echo "}" >>$@; \
++	);
++
++initext6.c: .initext6.dd
++	${AM_VERBOSE_GEN}
++	@( \
++	echo "" >$@; \
++	for i in ${initext6_func}; do \
++		echo "extern void lib$${i}_init(void);" >>$@; \
++	done; \
++	echo "void init_extensions(void);" >>$@; \
++	echo "void init_extensions(void)" >>$@; \
++	echo "{" >>$@; \
++	for i in ${initext6_func}; do \
++		echo " ""lib$${i}_init();" >>$@; \
++	done; \
++	echo "}" >>$@; \
++	);
++
++#
++#	Manual pages
++#
++ex_matches = $(sort $(shell echo $(1) | grep -Eo '\b[a-z0-9]+\b'))
++ex_targets = $(sort $(shell echo $(1) | grep -Eo '\b[A-Z0-9]+\b'))
++man_run    = \
++	${AM_VERBOSE_GEN} \
++	for ext in $(1); do \
++		f="${srcdir}/libxt_$$ext.man"; \
++		if [ -f "$$f" ]; then \
++			echo ".SS $$ext"; \
++			cat "$$f"; \
++			continue; \
++		fi; \
++		f="${srcdir}/libipt_$$ext.man"; \
++		if [ -f "$$f" ]; then \
++			echo ".SS $$ext"; \
++			cat "$$f"; \
++			continue; \
++		fi; \
++		f="${srcdir}/libip6t_$$ext.man"; \
++		if [ -f "$$f" ]; then \
++			echo ".SS $$ext"; \
++			cat "$$f"; \
++			continue; \
++		fi; \
++	done >$@;
++
++matches4.man: .initext4.dd $(wildcard ${srcdir}/lib*.man)
++	$(call man_run,$(call ex_matches,${pfx_build_mod} ${pf4_build_mod}))
++
++matches6.man: .initext6.dd $(wildcard ${srcdir}/lib*.man)
++	$(call man_run,$(call ex_matches,${pfx_build_mod} ${pf6_build_mod}))
++
++targets4.man: .initext4.dd $(wildcard ${srcdir}/lib*.man)
++	$(call man_run,$(call ex_targets,${pfx_build_mod} ${pf4_build_mod}))
++
++targets6.man: .initext6.dd $(wildcard ${srcdir}/lib*.man)
++	$(call man_run,$(call ex_targets,${pfx_build_mod} ${pf6_build_mod}))
+diff -Naur iptables-1.4.1.1/extensions/libip6t_ah.c iptables-mpls/extensions/libip6t_ah.c
+--- iptables-1.4.1.1/extensions/libip6t_ah.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_ah.c	2008-10-07 14:40:48.000000000 +0200
+@@ -207,7 +207,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&ah_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_dst.c iptables-mpls/extensions/libip6t_dst.c
+--- iptables-1.4.1.1/extensions/libip6t_dst.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_dst.c	2008-10-07 14:40:48.000000000 +0200
+@@ -242,7 +242,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&dst_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_eui64.c iptables-mpls/extensions/libip6t_eui64.c
+--- iptables-1.4.1.1/extensions/libip6t_eui64.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_eui64.c	2008-10-07 14:40:48.000000000 +0200
+@@ -38,7 +38,7 @@
+ 	.parse		= eui64_parse,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&eui64_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_frag.c iptables-mpls/extensions/libip6t_frag.c
+--- iptables-1.4.1.1/extensions/libip6t_frag.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_frag.c	2008-10-07 14:40:48.000000000 +0200
+@@ -252,7 +252,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&frag_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_hbh.c iptables-mpls/extensions/libip6t_hbh.c
+--- iptables-1.4.1.1/extensions/libip6t_hbh.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_hbh.c	2008-10-07 14:40:48.000000000 +0200
+@@ -229,7 +229,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&hbh_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_hl.c iptables-mpls/extensions/libip6t_hl.c
+--- iptables-1.4.1.1/extensions/libip6t_hl.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_hl.c	2008-10-07 14:40:48.000000000 +0200
+@@ -139,7 +139,7 @@
+ };
+ 
+ 
+-void _init(void) 
++void __attribute((constructor)) nf_ext_init(void) 
+ {
+ 	xtables_register_match(&hl_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_HL.c iptables-mpls/extensions/libip6t_HL.c
+--- iptables-1.4.1.1/extensions/libip6t_HL.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_HL.c	2008-10-07 14:40:48.000000000 +0200
+@@ -152,7 +152,7 @@
+ 	.extra_opts	= HL_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&hl_tg6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_icmp6.c iptables-mpls/extensions/libip6t_icmp6.c
+--- iptables-1.4.1.1/extensions/libip6t_icmp6.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_icmp6.c	2008-10-07 14:40:48.000000000 +0200
+@@ -265,7 +265,7 @@
+ 	.extra_opts	= icmp6_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&icmp6_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_ipv6header.c iptables-mpls/extensions/libip6t_ipv6header.c
+--- iptables-1.4.1.1/extensions/libip6t_ipv6header.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_ipv6header.c	2008-10-07 14:40:48.000000000 +0200
+@@ -300,7 +300,7 @@
+ 	.extra_opts	= ipv6header_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&ipv6header_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_LOG.c iptables-mpls/extensions/libip6t_LOG.c
+--- iptables-1.4.1.1/extensions/libip6t_LOG.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_LOG.c	2008-10-07 14:40:48.000000000 +0200
+@@ -269,7 +269,7 @@
+     .extra_opts    = LOG_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&log_tg6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_mh.c iptables-mpls/extensions/libip6t_mh.c
+--- iptables-1.4.1.1/extensions/libip6t_mh.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_mh.c	2008-10-07 14:40:48.000000000 +0200
+@@ -236,7 +236,7 @@
+ 	.extra_opts	= mh_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&mh_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_policy.c iptables-mpls/extensions/libip6t_policy.c
+--- iptables-1.4.1.1/extensions/libip6t_policy.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_policy.c	2008-10-07 14:40:48.000000000 +0200
+@@ -456,7 +456,7 @@
+ 	.extra_opts	= policy_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&policy_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_REJECT.c iptables-mpls/extensions/libip6t_REJECT.c
+--- iptables-1.4.1.1/extensions/libip6t_REJECT.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_REJECT.c	2008-10-07 14:40:48.000000000 +0200
+@@ -152,7 +152,7 @@
+ 	.extra_opts	= REJECT_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&reject_tg6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libip6t_REJECT.man iptables-mpls/extensions/libip6t_REJECT.man
+--- iptables-1.4.1.1/extensions/libip6t_REJECT.man	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_REJECT.man	2008-10-07 14:40:48.000000000 +0200
+@@ -32,5 +32,5 @@
+ (113/tcp) probes which frequently occur when sending mail to broken mail
+ hosts (which won't accept your mail otherwise).
+ .B tcp-reset
+-can only be used with kernel versions 2.6.14 or latter.
++can only be used with kernel versions 2.6.14 or later.
+ 
+diff -Naur iptables-1.4.1.1/extensions/libip6t_rt.c iptables-mpls/extensions/libip6t_rt.c
+--- iptables-1.4.1.1/extensions/libip6t_rt.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libip6t_rt.c	2008-10-07 14:40:48.000000000 +0200
+@@ -344,7 +344,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&rt_mt6_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_addrtype.c iptables-mpls/extensions/libipt_addrtype.c
+--- iptables-1.4.1.1/extensions/libipt_addrtype.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_addrtype.c	2008-10-07 14:40:48.000000000 +0200
+@@ -354,7 +354,7 @@
+ };
+ 
+ 
+-void _init(void) 
++void __attribute((constructor)) nf_ext_init(void) 
+ {
+ 	xtables_register_match(&addrtype_mt_reg_v0);
+ 	xtables_register_match(&addrtype_mt_reg_v1);
+diff -Naur iptables-1.4.1.1/extensions/libipt_ah.c iptables-mpls/extensions/libipt_ah.c
+--- iptables-1.4.1.1/extensions/libipt_ah.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_ah.c	2008-10-07 14:40:48.000000000 +0200
+@@ -170,7 +170,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&ah_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_CLUSTERIP.c iptables-mpls/extensions/libipt_CLUSTERIP.c
+--- iptables-1.4.1.1/extensions/libipt_CLUSTERIP.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_CLUSTERIP.c	2008-10-07 14:40:48.000000000 +0200
+@@ -247,7 +247,7 @@
+ 	.extra_opts	= CLUSTERIP_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&clusterip_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_DNAT.c iptables-mpls/extensions/libipt_DNAT.c
+--- iptables-1.4.1.1/extensions/libipt_DNAT.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_DNAT.c	2008-10-07 14:40:48.000000000 +0200
+@@ -255,7 +255,7 @@
+ 	.extra_opts	= DNAT_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&dnat_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_ecn.c iptables-mpls/extensions/libipt_ecn.c
+--- iptables-1.4.1.1/extensions/libipt_ecn.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_ecn.c	2008-10-07 14:40:48.000000000 +0200
+@@ -157,7 +157,7 @@
+     .extra_opts    = ecn_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&ecn_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_ECN.c iptables-mpls/extensions/libipt_ECN.c
+--- iptables-1.4.1.1/extensions/libipt_ECN.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_ECN.c	2008-10-07 14:40:48.000000000 +0200
+@@ -166,7 +166,7 @@
+ 	.extra_opts	= ECN_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&ecn_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_icmp.c iptables-mpls/extensions/libipt_icmp.c
+--- iptables-1.4.1.1/extensions/libipt_icmp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_icmp.c	2008-10-07 14:40:48.000000000 +0200
+@@ -287,7 +287,7 @@
+ 	.extra_opts	= icmp_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&icmp_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_LOG.c iptables-mpls/extensions/libipt_LOG.c
+--- iptables-1.4.1.1/extensions/libipt_LOG.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_LOG.c	2008-10-07 14:40:48.000000000 +0200
+@@ -271,7 +271,7 @@
+     .extra_opts    = LOG_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&log_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_MASQUERADE.c iptables-mpls/extensions/libipt_MASQUERADE.c
+--- iptables-1.4.1.1/extensions/libipt_MASQUERADE.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_MASQUERADE.c	2008-10-07 14:40:48.000000000 +0200
+@@ -162,7 +162,7 @@
+ 	.extra_opts	= MASQUERADE_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&masquerade_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_MIRROR.c iptables-mpls/extensions/libipt_MIRROR.c
+--- iptables-1.4.1.1/extensions/libipt_MIRROR.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_MIRROR.c	2008-10-07 14:40:48.000000000 +0200
+@@ -33,7 +33,7 @@
+ 	.save		= NULL,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&mirror_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_NETMAP.c iptables-mpls/extensions/libipt_NETMAP.c
+--- iptables-1.4.1.1/extensions/libipt_NETMAP.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_NETMAP.c	2008-10-07 14:40:48.000000000 +0200
+@@ -185,7 +185,7 @@
+ 	.extra_opts	= NETMAP_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&netmap_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_policy.c iptables-mpls/extensions/libipt_policy.c
+--- iptables-1.4.1.1/extensions/libipt_policy.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_policy.c	2008-10-07 14:40:48.000000000 +0200
+@@ -421,7 +421,7 @@
+ 	.extra_opts	= policy_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&policy_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_realm.c iptables-mpls/extensions/libipt_realm.c
+--- iptables-1.4.1.1/extensions/libipt_realm.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_realm.c	2008-10-07 14:40:48.000000000 +0200
+@@ -50,7 +50,7 @@
+ 	int id;
+ 	struct realmname *oldnm = NULL, *newnm = NULL;
+ 
+-	fil = fopen(rfnm, "r");
++	fil = fopen(rfnm, "re");
+ 	if (!fil) {
+ 		rdberr = 1;
+ 		return;
+@@ -256,7 +256,7 @@
+ 	.extra_opts	= realm_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&realm_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_recent.c iptables-mpls/extensions/libipt_recent.c
+--- iptables-1.4.1.1/extensions/libipt_recent.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_recent.c	2008-10-07 14:40:48.000000000 +0200
+@@ -222,7 +222,7 @@
+     .extra_opts    = recent_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&recent_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_REDIRECT.c iptables-mpls/extensions/libipt_REDIRECT.c
+--- iptables-1.4.1.1/extensions/libipt_REDIRECT.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_REDIRECT.c	2008-10-07 14:40:48.000000000 +0200
+@@ -173,7 +173,7 @@
+ 	.extra_opts	= REDIRECT_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&redirect_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_REJECT.c iptables-mpls/extensions/libipt_REJECT.c
+--- iptables-1.4.1.1/extensions/libipt_REJECT.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_REJECT.c	2008-10-07 14:40:48.000000000 +0200
+@@ -171,7 +171,7 @@
+ 	.extra_opts	= REJECT_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&reject_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_SAME.c iptables-mpls/extensions/libipt_SAME.c
+--- iptables-1.4.1.1/extensions/libipt_SAME.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_SAME.c	2008-10-07 14:40:48.000000000 +0200
+@@ -221,7 +221,7 @@
+ 	.extra_opts	= SAME_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&same_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_set.c iptables-mpls/extensions/libipt_set.c
+--- iptables-1.4.1.1/extensions/libipt_set.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_set.c	2008-10-07 14:40:48.000000000 +0200
+@@ -155,7 +155,7 @@
+ 	.extra_opts	= set_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&set_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_SET.c iptables-mpls/extensions/libipt_SET.c
+--- iptables-1.4.1.1/extensions/libipt_SET.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_SET.c	2008-10-07 14:40:48.000000000 +0200
+@@ -168,7 +168,7 @@
+ 	.extra_opts	= SET_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&set_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_SNAT.c iptables-mpls/extensions/libipt_SNAT.c
+--- iptables-1.4.1.1/extensions/libipt_SNAT.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_SNAT.c	2008-10-07 14:40:48.000000000 +0200
+@@ -256,7 +256,7 @@
+ 	.extra_opts	= SNAT_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&snat_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_ttl.c iptables-mpls/extensions/libipt_ttl.c
+--- iptables-1.4.1.1/extensions/libipt_ttl.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_ttl.c	2008-10-07 14:40:48.000000000 +0200
+@@ -162,7 +162,7 @@
+ };
+ 
+ 
+-void _init(void) 
++void __attribute((constructor)) nf_ext_init(void) 
+ {
+ 	xtables_register_match(&ttl_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_TTL.c iptables-mpls/extensions/libipt_TTL.c
+--- iptables-1.4.1.1/extensions/libipt_TTL.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_TTL.c	2008-10-07 14:40:48.000000000 +0200
+@@ -152,7 +152,7 @@
+ 	.extra_opts	= TTL_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&ttl_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_ULOG.c iptables-mpls/extensions/libipt_ULOG.c
+--- iptables-1.4.1.1/extensions/libipt_ULOG.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_ULOG.c	2008-10-07 14:40:48.000000000 +0200
+@@ -199,7 +199,7 @@
+ 	.extra_opts	= ULOG_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&ulog_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libipt_unclean.c iptables-mpls/extensions/libipt_unclean.c
+--- iptables-1.4.1.1/extensions/libipt_unclean.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libipt_unclean.c	2008-10-07 14:40:48.000000000 +0200
+@@ -28,7 +28,7 @@
+ 	.parse		= unclean_parse,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&unclean_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_CLASSIFY.c iptables-mpls/extensions/libxt_CLASSIFY.c
+--- iptables-1.4.1.1/extensions/libxt_CLASSIFY.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_CLASSIFY.c	2008-10-07 14:40:48.000000000 +0200
+@@ -114,7 +114,7 @@
+ 	.extra_opts	= CLASSIFY_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&classify_target);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_comment.c iptables-mpls/extensions/libxt_comment.c
+--- iptables-1.4.1.1/extensions/libxt_comment.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_comment.c	2008-10-07 14:40:49.000000000 +0200
+@@ -120,7 +120,7 @@
+ 	.extra_opts	= comment_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&comment_match);
+ 	xtables_register_match(&comment_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_connbytes.c iptables-mpls/extensions/libxt_connbytes.c
+--- iptables-1.4.1.1/extensions/libxt_connbytes.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_connbytes.c	2008-10-07 14:40:49.000000000 +0200
+@@ -212,7 +212,7 @@
+ 	.extra_opts	= connbytes_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&connbytes_match);
+ 	xtables_register_match(&connbytes_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_connlimit.c iptables-mpls/extensions/libxt_connlimit.c
+--- iptables-1.4.1.1/extensions/libxt_connlimit.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_connlimit.c	2008-10-07 14:40:49.000000000 +0200
+@@ -207,7 +207,7 @@
+ 	.extra_opts    = connlimit_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&connlimit_match);
+ 	xtables_register_match(&connlimit_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_connmark.c iptables-mpls/extensions/libxt_connmark.c
+--- iptables-1.4.1.1/extensions/libxt_connmark.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_connmark.c	2008-10-07 14:40:49.000000000 +0200
+@@ -227,7 +227,7 @@
+ 	.extra_opts     = connmark_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&connmark_mt_reg_v0);
+ 	xtables_register_match(&connmark_mt6_reg_v0);
+diff -Naur iptables-1.4.1.1/extensions/libxt_CONNMARK.c iptables-mpls/extensions/libxt_CONNMARK.c
+--- iptables-1.4.1.1/extensions/libxt_CONNMARK.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_CONNMARK.c	2008-10-07 14:40:48.000000000 +0200
+@@ -468,7 +468,7 @@
+ 	.extra_opts     = connmark_tg_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&connmark_target);
+ 	xtables_register_target(&connmark_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_CONNSECMARK.c iptables-mpls/extensions/libxt_CONNSECMARK.c
+--- iptables-1.4.1.1/extensions/libxt_CONNSECMARK.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_CONNSECMARK.c	2008-10-07 14:40:48.000000000 +0200
+@@ -136,7 +136,7 @@
+ 	.extra_opts	= CONNSECMARK_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&connsecmark_target);
+ 	xtables_register_target(&connsecmark_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_conntrack.c iptables-mpls/extensions/libxt_conntrack.c
+--- iptables-1.4.1.1/extensions/libxt_conntrack.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_conntrack.c	2008-10-07 14:40:49.000000000 +0200
+@@ -1060,7 +1060,7 @@
+ 	.extra_opts    = conntrack_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&conntrack_match);
+ 	xtables_register_match(&conntrack_mt_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_dccp.c iptables-mpls/extensions/libxt_dccp.c
+--- iptables-1.4.1.1/extensions/libxt_dccp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_dccp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -365,7 +365,7 @@
+ 	.extra_opts	= dccp_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&dccp_match);
+ 	xtables_register_match(&dccp_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_dscp.c iptables-mpls/extensions/libxt_dscp.c
+--- iptables-1.4.1.1/extensions/libxt_dscp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_dscp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -172,7 +172,7 @@
+ 	.extra_opts	= dscp_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&dscp_match);
+ 	xtables_register_match(&dscp_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_DSCP.c iptables-mpls/extensions/libxt_DSCP.c
+--- iptables-1.4.1.1/extensions/libxt_DSCP.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_DSCP.c	2008-10-07 14:40:48.000000000 +0200
+@@ -160,7 +160,7 @@
+ 	.extra_opts	= DSCP_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&dscp_target);
+ 	xtables_register_target(&dscp_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_esp.c iptables-mpls/extensions/libxt_esp.c
+--- iptables-1.4.1.1/extensions/libxt_esp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_esp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -181,7 +181,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&esp_match);
+ 	xtables_register_match(&esp_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_hashlimit.c iptables-mpls/extensions/libxt_hashlimit.c
+--- iptables-1.4.1.1/extensions/libxt_hashlimit.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_hashlimit.c	2008-10-07 14:40:49.000000000 +0200
+@@ -732,7 +732,7 @@
+ 	.extra_opts     = hashlimit_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&hashlimit_match);
+ 	xtables_register_match(&hashlimit_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_helper.c iptables-mpls/extensions/libxt_helper.c
+--- iptables-1.4.1.1/extensions/libxt_helper.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_helper.c	2008-10-07 14:40:49.000000000 +0200
+@@ -100,7 +100,7 @@
+ 	.extra_opts	= helper_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&helper_match);
+ 	xtables_register_match(&helper_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_iprange.c iptables-mpls/extensions/libxt_iprange.c
+--- iptables-1.4.1.1/extensions/libxt_iprange.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_iprange.c	2008-10-07 14:40:49.000000000 +0200
+@@ -388,7 +388,7 @@
+ 	.extra_opts     = iprange_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&iprange_match);
+ 	xtables_register_match(&iprange_mt_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_length.c iptables-mpls/extensions/libxt_length.c
+--- iptables-1.4.1.1/extensions/libxt_length.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_length.c	2008-10-07 14:40:49.000000000 +0200
+@@ -136,7 +136,7 @@
+ 	.extra_opts	= length_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&length_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_limit.c iptables-mpls/extensions/libxt_limit.c
+--- iptables-1.4.1.1/extensions/libxt_limit.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_limit.c	2008-10-07 14:40:49.000000000 +0200
+@@ -178,7 +178,7 @@
+ 	.extra_opts	= limit_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&limit_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_mac.c iptables-mpls/extensions/libxt_mac.c
+--- iptables-1.4.1.1/extensions/libxt_mac.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_mac.c	2008-10-07 14:40:49.000000000 +0200
+@@ -142,7 +142,7 @@
+ 	.extra_opts	= mac_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&mac_match);
+ 	xtables_register_match(&mac_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_mark.c iptables-mpls/extensions/libxt_mark.c
+--- iptables-1.4.1.1/extensions/libxt_mark.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_mark.c	2008-10-07 14:40:49.000000000 +0200
+@@ -177,7 +177,7 @@
+ 	.extra_opts     = mark_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&mark_match);
+ 	xtables_register_match(&mark_mt_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_MARK.c iptables-mpls/extensions/libxt_MARK.c
+--- iptables-1.4.1.1/extensions/libxt_MARK.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_MARK.c	2008-10-07 14:40:48.000000000 +0200
+@@ -342,7 +342,7 @@
+ 	.extra_opts    = mark_tg_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&mark_target_v0);
+ 	xtables_register_target(&mark_target_v1);
+diff -Naur iptables-1.4.1.1/extensions/libxt_mpls.c iptables-mpls/extensions/libxt_mpls.c
+--- iptables-1.4.1.1/extensions/libxt_mpls.c	1970-01-01 01:00:00.000000000 +0100
++++ iptables-mpls/extensions/libxt_mpls.c	2008-10-07 14:40:49.000000000 +0200
+@@ -0,0 +1,116 @@
++/* Shared library add-on to iptables to add mpls target support. */
++#include <stdbool.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include <getopt.h>
++
++#include <xtables.h>
++#include <linux/netfilter/x_tables.h>
++#include <linux/netfilter/xt_mpls.h>
++#include <linux/mpls.h>
++
++/* Function which prints out usage message. */
++static void help(void)
++{
++	printf(
++"mpls target options:\n"
++"  --nhlfe key		      Set an outgoing MPLS NHLFE\n");
++}
++
++static const struct option opts[] = {
++	{ "nhlfe", 1, NULL, '1' },
++	{ .name = NULL }
++};
++
++/* Function which parses command options; returns true if it
++   ate an option */
++static int
++parse(int c, char **argv, int invert, unsigned int *flags,
++      const void *entry, struct xt_entry_target **target)
++{
++	struct xt_mpls_target_info *mpls_info
++		= (struct xt_mpls_target_info *)(*target)->data;
++
++	switch (c) {
++	case '1':
++		if (*flags) {
++			exit_error(PARAMETER_PROBLEM,
++				   "mpls target: Can't specify --nhlfe twice");
++		}
++
++		if (string_to_number(optarg,0,0xffffffff,&(mpls_info->key))) {
++			exit_error(PARAMETER_PROBLEM, "Bad MPLS key `%s'",
++				optarg);
++		}
++
++		*flags = 1;
++		break;
++
++	default:
++		return 0;
++	}
++
++	return 1;
++}
++
++static void final_check(unsigned int flags)
++{
++	if (!flags)
++		exit_error(PARAMETER_PROBLEM,
++			   "mpls target: Parameter --nhlfe is required");
++}
++
++/* Prints out the targinfo. */
++static void print(const void *ip,
++                  const struct xt_entry_target *target, int numeric)
++{
++	const struct xt_mpls_target_info *mpls_info =
++		(const struct xt_mpls_target_info *)target->data;
++	printf("nhlfe 0x%x ", mpls_info->key);
++}
++
++/* Saves the union ipt_targinfo in parsable form to stdout. */
++static void save(const void *ip, const struct xt_entry_target *target)
++{
++	const struct xt_mpls_target_info *mpls_info =
++		(const struct xt_mpls_target_info *)target->data;
++
++	printf("--nhlfe 0x%x ", mpls_info->key);
++}
++
++static struct xtables_target mpls4 = {
++	.family		= AF_INET,
++	.name		= "mpls",
++	.version	= XTABLES_VERSION,
++	.revision	= 0,
++	.size		= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
++	.userspacesize	= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
++	.help		= &help,
++	.parse		= &parse,
++	.final_check	= &final_check,
++	.print		= &print,
++	.save		= &save,
++	.extra_opts	= opts
++};
++
++static struct xtables_target mpls6 = {
++	.family		= AF_INET6,
++	.name		= "mpls",
++	.version	= XTABLES_VERSION,
++	.revision	= 0,
++	.size		= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
++	.userspacesize	= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
++	.help		= &help,
++	.parse		= &parse,
++	.final_check	= &final_check,
++	.print		= &print,
++	.save		= &save,
++	.extra_opts	= opts
++};
++
++void __attribute((constructor)) nf_ext_init(void)
++{
++	xtables_register_target(&mpls4);
++	xtables_register_target(&mpls6);
++}
+diff -Naur iptables-1.4.1.1/extensions/libxt_multiport.c iptables-mpls/extensions/libxt_multiport.c
+--- iptables-1.4.1.1/extensions/libxt_multiport.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_multiport.c	2008-10-07 14:40:49.000000000 +0200
+@@ -568,7 +568,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&multiport_match);
+ 	xtables_register_match(&multiport_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_NFLOG.c iptables-mpls/extensions/libxt_NFLOG.c
+--- iptables-1.4.1.1/extensions/libxt_NFLOG.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_NFLOG.c	2008-10-07 14:40:48.000000000 +0200
+@@ -166,7 +166,7 @@
+ 	.extra_opts	= NFLOG_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&nflog_target);
+ 	xtables_register_target(&nflog_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_NFQUEUE.c iptables-mpls/extensions/libxt_NFQUEUE.c
+--- iptables-1.4.1.1/extensions/libxt_NFQUEUE.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_NFQUEUE.c	2008-10-07 14:40:49.000000000 +0200
+@@ -106,7 +106,7 @@
+ 	.extra_opts	= NFQUEUE_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&nfqueue_target);
+ 	xtables_register_target(&nfqueue_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_NOTRACK.c iptables-mpls/extensions/libxt_NOTRACK.c
+--- iptables-1.4.1.1/extensions/libxt_NOTRACK.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_NOTRACK.c	2008-10-07 14:40:49.000000000 +0200
+@@ -42,7 +42,7 @@
+ 	.parse		= NOTRACK_parse,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&notrack_target);
+ 	xtables_register_target(&notrack_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_owner.c iptables-mpls/extensions/libxt_owner.c
+--- iptables-1.4.1.1/extensions/libxt_owner.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_owner.c	2008-10-07 14:40:49.000000000 +0200
+@@ -587,7 +587,7 @@
+ 	.extra_opts    = owner_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&owner_mt_reg_v0);
+ 	xtables_register_match(&owner_mt6_reg_v0);
+diff -Naur iptables-1.4.1.1/extensions/libxt_physdev.c iptables-mpls/extensions/libxt_physdev.c
+--- iptables-1.4.1.1/extensions/libxt_physdev.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_physdev.c	2008-10-07 14:40:49.000000000 +0200
+@@ -189,7 +189,7 @@
+ 	.extra_opts	= physdev_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&physdev_match);
+ 	xtables_register_match(&physdev_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_pkttype.c iptables-mpls/extensions/libxt_pkttype.c
+--- iptables-1.4.1.1/extensions/libxt_pkttype.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_pkttype.c	2008-10-07 14:40:49.000000000 +0200
+@@ -159,7 +159,7 @@
+ 	.extra_opts	= pkttype_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&pkttype_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_quota.c iptables-mpls/extensions/libxt_quota.c
+--- iptables-1.4.1.1/extensions/libxt_quota.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_quota.c	2008-10-07 14:40:49.000000000 +0200
+@@ -91,7 +91,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&quota_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_rateest.c iptables-mpls/extensions/libxt_rateest.c
+--- iptables-1.4.1.1/extensions/libxt_rateest.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_rateest.c	2008-10-07 14:40:49.000000000 +0200
+@@ -438,7 +438,7 @@
+ 	.extra_opts	= rateest_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&rateest_mt_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_RATEEST.c iptables-mpls/extensions/libxt_RATEEST.c
+--- iptables-1.4.1.1/extensions/libxt_RATEEST.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_RATEEST.c	2008-10-07 14:40:49.000000000 +0200
+@@ -216,7 +216,7 @@
+ 	.extra_opts	= RATEEST_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&rateest_tg_reg);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_sctp.c iptables-mpls/extensions/libxt_sctp.c
+--- iptables-1.4.1.1/extensions/libxt_sctp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_sctp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -538,7 +538,7 @@
+ 	.extra_opts	= sctp_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&sctp_match);
+ 	xtables_register_match(&sctp_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_SECMARK.c iptables-mpls/extensions/libxt_SECMARK.c
+--- iptables-1.4.1.1/extensions/libxt_SECMARK.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_SECMARK.c	2008-10-07 14:40:49.000000000 +0200
+@@ -112,7 +112,7 @@
+ 	.extra_opts	= SECMARK_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&secmark_target);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_standard.c iptables-mpls/extensions/libxt_standard.c
+--- iptables-1.4.1.1/extensions/libxt_standard.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_standard.c	2008-10-07 14:40:49.000000000 +0200
+@@ -33,7 +33,7 @@
+ 	.parse		= standard_parse,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&standard_target);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_state.c iptables-mpls/extensions/libxt_state.c
+--- iptables-1.4.1.1/extensions/libxt_state.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_state.c	2008-10-07 14:40:49.000000000 +0200
+@@ -169,7 +169,7 @@
+ 	.extra_opts	= state_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&state_match);
+ 	xtables_register_match(&state_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_statistic.c iptables-mpls/extensions/libxt_statistic.c
+--- iptables-1.4.1.1/extensions/libxt_statistic.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_statistic.c	2008-10-07 14:40:49.000000000 +0200
+@@ -176,7 +176,7 @@
+ 	.extra_opts	= statistic_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&statistic_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_string.c iptables-mpls/extensions/libxt_string.c
+--- iptables-1.4.1.1/extensions/libxt_string.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_string.c	2008-10-07 14:40:49.000000000 +0200
+@@ -339,7 +339,7 @@
+     .extra_opts		= string_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&string_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_tcp.c iptables-mpls/extensions/libxt_tcp.c
+--- iptables-1.4.1.1/extensions/libxt_tcp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_tcp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -411,7 +411,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&tcp_match);
+ 	xtables_register_match(&tcp_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_tcpmss.c iptables-mpls/extensions/libxt_tcpmss.c
+--- iptables-1.4.1.1/extensions/libxt_tcpmss.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_tcpmss.c	2008-10-07 14:40:49.000000000 +0200
+@@ -152,7 +152,7 @@
+ 	.extra_opts	= tcpmss_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&tcpmss_match);
+ 	xtables_register_match(&tcpmss_match6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_TCPMSS.c iptables-mpls/extensions/libxt_TCPMSS.c
+--- iptables-1.4.1.1/extensions/libxt_TCPMSS.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_TCPMSS.c	2008-10-07 14:40:49.000000000 +0200
+@@ -151,7 +151,7 @@
+ 	.extra_opts	= TCPMSS_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&tcpmss_target);
+ 	xtables_register_target(&tcpmss_target6);
+diff -Naur iptables-1.4.1.1/extensions/libxt_TCPOPTSTRIP.c iptables-mpls/extensions/libxt_TCPOPTSTRIP.c
+--- iptables-1.4.1.1/extensions/libxt_TCPOPTSTRIP.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_TCPOPTSTRIP.c	2008-10-07 14:40:49.000000000 +0200
+@@ -205,7 +205,7 @@
+ 	.extra_opts    = tcpoptstrip_tg_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&tcpoptstrip_tg_reg);
+ 	xtables_register_target(&tcpoptstrip_tg6_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_time.c iptables-mpls/extensions/libxt_time.c
+--- iptables-1.4.1.1/extensions/libxt_time.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_time.c	2008-10-07 14:40:49.000000000 +0200
+@@ -477,7 +477,7 @@
+ 	.extra_opts    = time_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&time_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_tos.c iptables-mpls/extensions/libxt_tos.c
+--- iptables-1.4.1.1/extensions/libxt_tos.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_tos.c	2008-10-07 14:40:49.000000000 +0200
+@@ -182,7 +182,7 @@
+ 	.extra_opts    = tos_mt_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&tos_mt_reg_v0);
+ 	xtables_register_match(&tos_mt_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_TOS.c iptables-mpls/extensions/libxt_TOS.c
+--- iptables-1.4.1.1/extensions/libxt_TOS.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_TOS.c	2008-10-07 14:40:49.000000000 +0200
+@@ -249,7 +249,7 @@
+ 	.extra_opts    = tos_tg_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&tos_tg_reg_v0);
+ 	xtables_register_target(&tos_tg_reg);
+diff -Naur iptables-1.4.1.1/extensions/libxt_TRACE.c iptables-mpls/extensions/libxt_TRACE.c
+--- iptables-1.4.1.1/extensions/libxt_TRACE.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_TRACE.c	2008-10-07 14:40:49.000000000 +0200
+@@ -31,7 +31,7 @@
+ 	.parse		= TRACE_parse,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_target(&trace_target);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_u32.c iptables-mpls/extensions/libxt_u32.c
+--- iptables-1.4.1.1/extensions/libxt_u32.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_u32.c	2008-10-07 14:40:49.000000000 +0200
+@@ -281,7 +281,7 @@
+ 	.extra_opts    = u32_opts,
+ };
+ 
+-void _init(void)
++void __attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&u32_match);
+ }
+diff -Naur iptables-1.4.1.1/extensions/libxt_udp.c iptables-mpls/extensions/libxt_udp.c
+--- iptables-1.4.1.1/extensions/libxt_udp.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/libxt_udp.c	2008-10-07 14:40:49.000000000 +0200
+@@ -224,7 +224,7 @@
+ };
+ 
+ void
+-_init(void)
++__attribute((constructor)) nf_ext_init(void)
+ {
+ 	xtables_register_match(&udp_match);
+ 	xtables_register_match(&udp_match6);
+diff -Naur iptables-1.4.1.1/extensions/tos_values.c iptables-mpls/extensions/tos_values.c
+--- iptables-1.4.1.1/extensions/tos_values.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/extensions/tos_values.c	2008-10-07 14:40:49.000000000 +0200
+@@ -56,8 +56,9 @@
+ {
+ 	const unsigned int max = 255;
+ 	const struct tos_symbol_info *symbol;
++	char *tmp;
+ 
+-	if (strtonum(str, NULL, NULL, 0, max))
++	if (strtonum(str, &tmp, NULL, 0, max))
+ 		return tos_parse_numeric(str, tvm, max);
+ 
+ 	/* Do not consider ECN bits */
+diff -Naur iptables-1.4.1.1/include/linux/mpls.h iptables-mpls/include/linux/mpls.h
+--- iptables-1.4.1.1/include/linux/mpls.h	1970-01-01 01:00:00.000000000 +0100
++++ iptables-mpls/include/linux/mpls.h	2008-11-18 21:14:26.000000000 +0100
+@@ -0,0 +1,248 @@
++/*****************************************************************************
++ * MPLS
++ *      An implementation of the MPLS (MultiProtocol Label
++ *      Switching Architecture) for Linux.
++ *
++ * Authors:
++ *          James Leu        <jleu@mindspring.com>
++ *          Ramon Casellas   <casellas@infres.enst.fr>
++ *
++ *   (c) 1999-2004   James Leu        <jleu@mindspring.com>
++ *   (c) 2003-2004   Ramon Casellas   <casellas@infres.enst.fr>
++ *
++ * include/linux/mpls.h
++ *      Data types and structs used by userspace programs to access MPLS
++ *      forwarding. Most interface with the MPLS subsystem is IOCTL based
++ *
++ *      This program is free software; you can redistribute it and/or
++ *      modify it under the terms of the GNU General Public License
++ *      as published by the Free Software Foundation; either version
++ *      2 of the License, or (at your option) any later version.
++ ****************************************************************************/
++
++#ifndef _LINUX_MPLS_H_
++#define _LINUX_MPLS_H_
++
++#ifdef __KERNEL__
++#include <linux/socket.h>
++#include <linux/if.h>
++#else
++#include <sys/socket.h>
++#include <linux/types.h>
++#include <net/if.h>
++#endif
++
++#define MPLS_NUM_OPS		8
++
++#define MPLS_LINUX_VERSION	0x01090602
++
++#define	MPLS_GRP_ILM	1
++#define	MPLS_GRP_NHLFE	2
++#define	MPLS_GRP_XC	4
++#define	MPLS_GRP_LABELSPACE 8
++
++#define MPLS_IPV4_EXPLICIT_NULL	0       /* only valid as sole label stack entry
++					   Pop label and send to IPv4 stack */
++#define MPLS_ROUTER_ALERT	1       /* anywhere except bottom, packet it is
++					   forwared to a software module
++					   determined by the next label,
++					   if the packet is forwarded, push this
++					   label back on */
++#define MPLS_IPV6_EXPLICIT_NULL	2       /* only valid as sole label stack entry
++					   Pop label and send to IPv6 stack */
++#define MPLS_IMPLICIT_NULL	3       /* a LIB with this, signifies to pop
++					   the next label and use that */
++
++#define MPLS_CHANGE_MTU		0x01
++#define MPLS_CHANGE_PROP_TTL	0x02
++#define MPLS_CHANGE_INSTR	0x04
++#define MPLS_CHANGE_PROTO	0x10
++
++enum mpls_dir {
++	MPLS_IN = 0x10,
++	MPLS_OUT = 0x20
++};
++
++enum mpls_opcode_enum {
++	MPLS_OP_NOP = 0x00,
++	MPLS_OP_POP,
++	MPLS_OP_PEEK,
++	MPLS_OP_PUSH,
++	MPLS_OP_DLV,
++	MPLS_OP_FWD,
++	MPLS_OP_NF_FWD,
++	MPLS_OP_DS_FWD,
++	MPLS_OP_EXP_FWD,
++	MPLS_OP_SET,
++	MPLS_OP_SET_RX,
++	MPLS_OP_SET_TC,
++	MPLS_OP_SET_DS,
++	MPLS_OP_SET_EXP,
++	MPLS_OP_EXP2TC,
++	MPLS_OP_EXP2DS,
++	MPLS_OP_TC2EXP,
++	MPLS_OP_DS2EXP,
++	MPLS_OP_NF2EXP,
++	MPLS_OP_SET_NF,
++	MPLS_OP_MAX
++};
++
++enum mpls_label_type_enum {
++	MPLS_LABEL_GEN = 1,
++	MPLS_LABEL_ATM,
++	MPLS_LABEL_FR,
++	MPLS_LABEL_KEY
++};
++
++struct mpls_label_atm {
++	u_int16_t  mla_vpi;
++	u_int16_t  mla_vci;
++};
++
++struct mpls_label {
++	enum mpls_label_type_enum ml_type;
++	union {
++		u_int32_t ml_key;
++		u_int32_t ml_gen;
++		u_int32_t ml_fr;
++		struct mpls_label_atm ml_atm;
++	} u;
++	int ml_index;
++};
++
++struct mpls_in_label_req {
++	unsigned int      mil_proto;
++	struct mpls_label mil_label;
++	unsigned char     mil_change_flag;
++};
++
++#define MPLS_LABELSPACE_MAX	255
++
++struct mpls_labelspace_req {
++	int mls_ifindex;                  /* Index to the MPLS-enab. interface*/
++	int mls_labelspace;               /* Labelspace IN/SET -- OUT/GET     */
++};
++
++struct mpls_nexthop_info {
++	unsigned int    mni_if;
++	struct sockaddr mni_addr;
++};
++
++struct mpls_out_label_req {
++	struct mpls_label mol_label;
++	u_int32_t         mol_mtu;
++	int8_t            mol_propagate_ttl;
++	unsigned char     mol_change_flag;
++};
++
++struct mpls_xconnect_req {
++	struct mpls_label mx_in;
++	struct mpls_label mx_out;
++};
++
++struct mpls_tunnel_req {
++	char mt_ifname[IFNAMSIZ];
++	unsigned int mt_nhlfe_key;
++};
++
++#define MPLS_NFMARK_NUM 64
++
++struct mpls_nfmark_fwd {
++	unsigned int nf_key[MPLS_NFMARK_NUM];
++	unsigned short nf_mask;
++};
++
++#define MPLS_DSMARK_NUM 64
++
++struct mpls_dsmark_fwd {
++	unsigned int df_key[MPLS_DSMARK_NUM];
++	unsigned char df_mask;
++};
++
++#define MPLS_TCINDEX_NUM 64
++
++struct mpls_tcindex_fwd {
++	unsigned int tc_key[MPLS_TCINDEX_NUM];
++	unsigned short tc_mask;
++};
++
++#define MPLS_EXP_NUM 8
++
++struct mpls_exp_fwd {
++	unsigned int ef_key[MPLS_EXP_NUM];
++};
++
++struct mpls_exp2tcindex {
++	unsigned short e2t[MPLS_EXP_NUM];
++};
++
++struct mpls_exp2dsmark {
++	unsigned char e2d[MPLS_EXP_NUM];
++};
++
++struct mpls_tcindex2exp {
++	unsigned char t2e_mask;
++	unsigned char t2e[MPLS_TCINDEX_NUM];
++};
++
++struct mpls_dsmark2exp {
++	unsigned char d2e_mask;
++	unsigned char d2e[MPLS_DSMARK_NUM];
++};
++
++struct mpls_nfmark2exp {
++	unsigned char n2e_mask;
++	unsigned char n2e[MPLS_NFMARK_NUM];
++};
++
++struct mpls_instr_elem {
++	unsigned short mir_opcode;
++	unsigned char mir_direction;
++	union {
++		struct mpls_label        push;
++		struct mpls_label        fwd;
++		struct mpls_nfmark_fwd   nf_fwd;
++		struct mpls_dsmark_fwd   ds_fwd;
++		struct mpls_exp_fwd      exp_fwd;
++		struct mpls_nexthop_info set;
++		unsigned int             set_rx;
++		unsigned short           set_tc;
++		unsigned short           set_ds;
++		unsigned char            set_exp;
++		struct mpls_exp2tcindex  exp2tc;
++		struct mpls_exp2dsmark   exp2ds;
++		struct mpls_tcindex2exp  tc2exp;
++		struct mpls_dsmark2exp   ds2exp;
++		struct mpls_nfmark2exp   nf2exp;
++		unsigned long            set_nf;
++	} mir_data;
++};
++
++/* Standard shortcuts */
++#define mir_push       mir_data.push
++#define mir_fwd        mir_data.fwd
++#define mir_nf_fwd     mir_data.nf_fwd
++#define mir_ds_fwd     mir_data.ds_fwd
++#define mir_exp_fwd    mir_data.exp_fwd
++#define mir_set        mir_data.set
++#define mir_set_rx     mir_data.set_rx
++#define mir_set_tc     mir_data.set_tc
++#define mir_set_tx     mir_data.set_tx
++#define mir_set_ds     mir_data.set_ds
++#define mir_set_exp    mir_data.set_exp
++#define mir_set_nf     mir_data.set_nf
++#define mir_exp2tc     mir_data.exp2tc
++#define mir_exp2ds     mir_data.exp2ds
++#define mir_tc2exp     mir_data.tc2exp
++#define mir_ds2exp     mir_data.ds2exp
++#define mir_nf2exp     mir_data.nf2exp
++
++struct mpls_instr_req {
++	struct mpls_instr_elem       mir_instr[MPLS_NUM_OPS];
++	unsigned char                mir_instr_length;
++	unsigned char                mir_direction;
++	int                          mir_index;
++	struct mpls_label            mir_label;
++};
++
++#endif
+diff -Naur iptables-1.4.1.1/include/linux/netfilter/xt_mpls.h iptables-mpls/include/linux/netfilter/xt_mpls.h
+--- iptables-1.4.1.1/include/linux/netfilter/xt_mpls.h	1970-01-01 01:00:00.000000000 +0100
++++ iptables-mpls/include/linux/netfilter/xt_mpls.h	2008-11-18 21:14:26.000000000 +0100
+@@ -0,0 +1,12 @@
++#ifndef _XT_MPLS_H_target
++#define _XT_MPLS_H_target
++
++struct xt_mpls_target_info {
++	u_int32_t key;
++
++	/* only used by the netfilter kernel modules */
++	void *nhlfe;
++	void *proto;
++};
++
++#endif /*_XT_MPLS_H_target */
+diff -Naur iptables-1.4.1.1/include/xtables/internal.h iptables-mpls/include/xtables/internal.h
+--- iptables-1.4.1.1/include/xtables/internal.h	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/include/xtables/internal.h	2008-10-07 14:40:50.000000000 +0200
+@@ -61,6 +61,6 @@
+ 					struct xtables_rule_match **match);
+ extern struct xtables_target *find_target(const char *name, enum xt_tryload);
+ 
+-extern void _init(void);
++extern void nf_ext_init(void);
+ 
+ #endif /* _XTABLES_INTERNAL_H */
+diff -Naur iptables-1.4.1.1/include/xtables.h iptables-mpls/include/xtables.h
+--- iptables-1.4.1.1/include/xtables.h	1970-01-01 01:00:00.000000000 +0100
++++ iptables-mpls/include/xtables.h	2008-10-07 15:09:25.000000000 +0200
+@@ -0,0 +1,221 @@
++#ifndef _XTABLES_H
++#define _XTABLES_H
++
++#include <sys/types.h>
++#include <linux/types.h>
++#include <linux/netfilter/x_tables.h>
++#include <libiptc/libxtc.h>
++#include <stdbool.h>
++
++#ifndef IPPROTO_SCTP
++#define IPPROTO_SCTP 132
++#endif
++#ifndef IPPROTO_DCCP
++#define IPPROTO_DCCP 33
++#endif
++#ifndef IPPROTO_UDPLITE
++#define IPPROTO_UDPLITE	136
++#endif
++
++#define XTABLES_VERSION "1.4.1.1"
++#define XTABLES_VERSION_CODE (0x10000 * 1 + 0x100 * 4 + 1)
++
++#define XTABLES_API_VERSION(x,y,z)    (0x10000*(x) + 0x100*(y) + z)
++
++/* Include file for additions: new matches and targets. */
++struct xtables_match
++{
++	struct xtables_match *next;
++
++	xt_chainlabel name;
++
++	/* Revision of match (0 by default). */
++	u_int8_t revision;
++
++	u_int16_t family;
++
++	const char *version;
++
++	/* Size of match data. */
++	size_t size;
++
++	/* Size of match data relevent for userspace comparison purposes */
++	size_t userspacesize;
++
++	/* Function which prints out usage message. */
++	void (*help)(void);
++
++	/* Initialize the match. */
++	void (*init)(struct xt_entry_match *m);
++
++	/* Function which parses command options; returns true if it
++           ate an option */
++	/* entry is struct ipt_entry for example */
++	int (*parse)(int c, char **argv, int invert, unsigned int *flags,
++		     const void *entry,
++		     struct xt_entry_match **match);
++
++	/* Final check; exit if not ok. */
++	void (*final_check)(unsigned int flags);
++
++	/* Prints out the match iff non-NULL: put space at end */
++	/* ip is struct ipt_ip * for example */
++	void (*print)(const void *ip,
++		      const struct xt_entry_match *match, int numeric);
++
++	/* Saves the match info in parsable form to stdout. */
++	/* ip is struct ipt_ip * for example */
++	void (*save)(const void *ip, const struct xt_entry_match *match);
++
++	/* Pointer to list of extra command-line options */
++	const struct option *extra_opts;
++
++	/* Ignore these men behind the curtain: */
++	unsigned int option_offset;
++	struct xt_entry_match *m;
++	unsigned int mflags;
++#ifdef NO_SHARED_LIBS
++	unsigned int loaded; /* simulate loading so options are merged properly */
++#endif
++};
++
++struct xtables_target
++{
++	struct xtables_target *next;
++
++	xt_chainlabel name;
++
++	/* Revision of target (0 by default). */
++	u_int8_t revision;
++
++	u_int16_t family;
++
++	const char *version;
++
++	/* Size of target data. */
++	size_t size;
++
++	/* Size of target data relevent for userspace comparison purposes */
++	size_t userspacesize;
++
++	/* Function which prints out usage message. */
++	void (*help)(void);
++
++	/* Initialize the target. */
++	void (*init)(struct xt_entry_target *t);
++
++	/* Function which parses command options; returns true if it
++           ate an option */
++	/* entry is struct ipt_entry for example */
++	int (*parse)(int c, char **argv, int invert, unsigned int *flags,
++		     const void *entry,
++		     struct xt_entry_target **targetinfo);
++
++	/* Final check; exit if not ok. */
++	void (*final_check)(unsigned int flags);
++
++	/* Prints out the target iff non-NULL: put space at end */
++	void (*print)(const void *ip,
++		      const struct xt_entry_target *target, int numeric);
++
++	/* Saves the targinfo in parsable form to stdout. */
++	void (*save)(const void *ip,
++		     const struct xt_entry_target *target);
++
++	/* Pointer to list of extra command-line options */
++	const struct option *extra_opts;
++
++	/* Ignore these men behind the curtain: */
++	unsigned int option_offset;
++	struct xt_entry_target *t;
++	unsigned int tflags;
++	unsigned int used;
++#ifdef NO_SHARED_LIBS
++	unsigned int loaded; /* simulate loading so options are merged properly */
++#endif
++};
++
++/* Your shared library should call one of these. */
++extern void xtables_register_match(struct xtables_match *me);
++extern void xtables_register_target(struct xtables_target *me);
++
++extern int string_to_number_ll(const char *s,
++			       unsigned long long min,
++			       unsigned long long max,
++			       unsigned long long *ret);
++extern int string_to_number_l(const char *s,
++			      unsigned long min,
++			      unsigned long max,
++			      unsigned long *ret);
++extern int string_to_number(const char *s,
++			    unsigned int min,
++			    unsigned int max,
++			    unsigned int *ret);
++extern bool strtonuml(const char *, char **, unsigned long *,
++	unsigned long, unsigned long);
++extern bool strtonum(const char *, char **, unsigned int *,
++	unsigned int, unsigned int);
++extern int service_to_port(const char *name, const char *proto);
++extern u_int16_t parse_port(const char *port, const char *proto);
++extern void
++parse_interface(const char *arg, char *vianame, unsigned char *mask);
++
++enum exittype {
++	OTHER_PROBLEM = 1,
++	PARAMETER_PROBLEM,
++	VERSION_PROBLEM,
++	RESOURCE_PROBLEM,
++	P_ONLY_ONCE,
++	P_NO_INVERT,
++	P_BAD_VALUE,
++	P_ONE_ACTION,
++};
++
++/* this is a special 64bit data type that is 8-byte aligned */
++#define aligned_u64 u_int64_t __attribute__((aligned(8)))
++
++int check_inverse(const char option[], int *invert, int *my_optind, int argc);
++void exit_error(enum exittype, const char *, ...)__attribute__((noreturn,
++							  format(printf,2,3)));
++extern void param_act(unsigned int, const char *, ...);
++extern const char *program_name, *program_version;
++
++extern const char *ipaddr_to_numeric(const struct in_addr *);
++extern const char *ipaddr_to_anyname(const struct in_addr *);
++extern const char *ipmask_to_numeric(const struct in_addr *);
++extern struct in_addr *numeric_to_ipaddr(const char *);
++extern struct in_addr *numeric_to_ipmask(const char *);
++extern void ipparse_hostnetworkmask(const char *, struct in_addr **,
++	struct in_addr *, unsigned int *);
++
++extern struct in6_addr *numeric_to_ip6addr(const char *);
++extern const char *ip6addr_to_numeric(const struct in6_addr *);
++extern const char *ip6addr_to_anyname(const struct in6_addr *);
++extern const char *ip6mask_to_numeric(const struct in6_addr *);
++extern void ip6parse_hostnetworkmask(const char *, struct in6_addr **,
++	struct in6_addr *, unsigned int *);
++
++/**
++ * Print the specified value to standard output, quoting dangerous
++ * characters if required.
++ */
++extern void save_string(const char *value);
++
++#ifdef NO_SHARED_LIBS
++#	ifdef NF_EXT_INIT
++#		undef nf_ext_init
++#		define nf_ext_init NF_EXT_INIT
++#	endif
++	extern void init_extensions(void);
++#else
++#	define nf_ext_init __attribute__((constructor)) NF_EXT_INIT
++#endif
++
++/* Present in both iptables.c and ip6tables.c */
++extern u_int16_t parse_protocol(const char *s);
++
++#ifdef XTABLES_INTERNAL
++#	include <xtables/internal.h>
++#endif
++
++#endif /* _XTABLES_H */
+diff -Naur iptables-1.4.1.1/include/xtables.h.in iptables-mpls/include/xtables.h.in
+--- iptables-1.4.1.1/include/xtables.h.in	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/include/xtables.h.in	2008-10-07 14:40:50.000000000 +0200
+@@ -202,13 +202,13 @@
+ extern void save_string(const char *value);
+ 
+ #ifdef NO_SHARED_LIBS
+-#	ifdef _INIT
+-#		undef _init
+-#		define _init _INIT
++#	ifdef NF_EXT_INIT
++#		undef nf_ext_init
++#		define nf_ext_init NF_EXT_INIT
+ #	endif
+ 	extern void init_extensions(void);
+ #else
+-#	define _init __attribute__((constructor)) _INIT
++#	define nf_ext_init __attribute__((constructor)) NF_EXT_INIT
+ #endif
+ 
+ /* Present in both iptables.c and ip6tables.c */
+diff -Naur iptables-1.4.1.1/ip6tables-restore.c iptables-mpls/ip6tables-restore.c
+--- iptables-1.4.1.1/ip6tables-restore.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/ip6tables-restore.c	2008-10-07 14:40:50.000000000 +0200
+@@ -172,7 +172,7 @@
+ 	}
+ 
+ 	if (optind == argc - 1) {
+-		in = fopen(argv[optind], "r");
++		in = fopen(argv[optind], "re");
+ 		if (!in) {
+ 			fprintf(stderr, "Can't open %s: %s\n", argv[optind],
+ 				strerror(errno));
+diff -Naur iptables-1.4.1.1/ip6tables-save.c iptables-mpls/ip6tables-save.c
+--- iptables-1.4.1.1/ip6tables-save.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/ip6tables-save.c	2008-10-07 14:40:50.000000000 +0200
+@@ -40,7 +40,7 @@
+ 	FILE *procfile = NULL;
+ 	char tablename[IP6T_TABLE_MAXNAMELEN+1];
+ 
+-	procfile = fopen("/proc/net/ip6_tables_names", "r");
++	procfile = fopen("/proc/net/ip6_tables_names", "re");
+ 	if (!procfile)
+ 		exit_error(OTHER_PROBLEM,
+ 			   "Unable to open /proc/net/ip6_tables_names: %s\n",
+diff -Naur iptables-1.4.1.1/iptables.c iptables-mpls/iptables.c
+--- iptables-1.4.1.1/iptables.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/iptables.c	2008-10-07 14:40:50.000000000 +0200
+@@ -39,6 +39,7 @@
+ #include <xtables.h>
+ #include <fcntl.h>
+ #include <sys/utsname.h>
++#include <linux/mpls.h>
+ 
+ #ifndef TRUE
+ #define TRUE 1
+@@ -1774,10 +1775,19 @@
+ 
+ 		case 'V':
+ 			if (invert)
+-				printf("Not %s ;-)\n", program_version);
++				printf("Not %s mpls-linux %d.%d%d%d ;-)\n",
++					program_version,
++					(MPLS_LINUX_VERSION >> 24) & 0xFF,
++					(MPLS_LINUX_VERSION >> 16) & 0xFF,
++					(MPLS_LINUX_VERSION >> 8) & 0xFF,
++					(MPLS_LINUX_VERSION) & 0xFF);
+ 			else
+-				printf("%s v%s\n",
+-				       program_name, program_version);
++				printf("%s v%s mpls-linux %d.%d%d%d\n",
++					program_name, program_version,
++					(MPLS_LINUX_VERSION >> 24) & 0xFF,
++					(MPLS_LINUX_VERSION >> 16) & 0xFF,
++					(MPLS_LINUX_VERSION >> 8) & 0xFF,
++					(MPLS_LINUX_VERSION) & 0xFF);
+ 			exit(0);
+ 
+ 		case '0':
+diff -Naur iptables-1.4.1.1/iptables-restore.c iptables-mpls/iptables-restore.c
+--- iptables-1.4.1.1/iptables-restore.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/iptables-restore.c	2008-10-07 14:40:50.000000000 +0200
+@@ -176,7 +176,7 @@
+ 	}
+ 
+ 	if (optind == argc - 1) {
+-		in = fopen(argv[optind], "r");
++		in = fopen(argv[optind], "re");
+ 		if (!in) {
+ 			fprintf(stderr, "Can't open %s: %s\n", argv[optind],
+ 				strerror(errno));
+diff -Naur iptables-1.4.1.1/iptables-save.c iptables-mpls/iptables-save.c
+--- iptables-1.4.1.1/iptables-save.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/iptables-save.c	2008-10-07 14:40:50.000000000 +0200
+@@ -38,7 +38,7 @@
+ 	FILE *procfile = NULL;
+ 	char tablename[IPT_TABLE_MAXNAMELEN+1];
+ 
+-	procfile = fopen("/proc/net/ip_tables_names", "r");
++	procfile = fopen("/proc/net/ip_tables_names", "re");
+ 	if (!procfile)
+ 		exit_error(OTHER_PROBLEM,
+ 			   "Unable to open /proc/net/ip_tables_names: %s\n",
+diff -Naur iptables-1.4.1.1/iptables-xml.c iptables-mpls/iptables-xml.c
+--- iptables-1.4.1.1/iptables-xml.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/iptables-xml.c	2008-10-07 14:40:50.000000000 +0200
+@@ -664,7 +664,7 @@
+ 	}
+ 
+ 	if (optind == argc - 1) {
+-		in = fopen(argv[optind], "r");
++		in = fopen(argv[optind], "re");
+ 		if (!in) {
+ 			fprintf(stderr, "Can't open %s: %s", argv[optind],
+ 				strerror(errno));
+diff -Naur iptables-1.4.1.1/xtables.c iptables-mpls/xtables.c
+--- iptables-1.4.1.1/xtables.c	2008-06-16 15:12:40.000000000 +0200
++++ iptables-mpls/xtables.c	2008-10-07 14:40:51.000000000 +0200
+@@ -85,6 +85,11 @@
+ 	procfile = open(PROC_SYS_MODPROBE, O_RDONLY);
+ 	if (procfile < 0)
+ 		return NULL;
++ 	if (fcntl(procfile, F_SETFD, FD_CLOEXEC) == -1) {
++ 		fprintf(stderr, "Could not set close on exec: %s\n",
++ 			strerror(errno));
++ 		exit(1);
++ 	}
+ 
+ 	ret = (char *) malloc(PROCFILE_BUFSIZ);
+ 	if (ret) {
+@@ -498,6 +503,12 @@
+ 		exit(1);
+ 	}
+ 
++ 	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
++ 		fprintf(stderr, "Could not set close on exec: %s\n",
++ 			strerror(errno));
++ 		exit(1);
++ 	}
++
+ 	load_xtables_ko(modprobe_program, 1);
+ 
+ 	strcpy(rev.name, name);

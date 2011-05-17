@@ -1,0 +1,43 @@
+# Pick the mirror that is nearest to you among the following ones:
+#
+#deb http://ftp.at.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.wa.au.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.au.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.bg.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.br.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.ch.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.cl.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.cz.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.de.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp2.de.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.dk.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.ee.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.es.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.fi.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.fr.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp2.fr.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.uk.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.hk.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.hr.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.hu.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.ie.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.is.debian.org/debian/ unstable main contrib non-free
+deb http://ftp.it.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.jp.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp2.jp.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.kr.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.mx.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.nl.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.no.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.nz.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.pl.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.pt.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.ro.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.ru.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.se.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.si.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.sk.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.tr.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.tw.debian.org/debian/ unstable main contrib non-free
+#deb http://ftp.us.debian.org/debian/ unstable main contrib non-free
+

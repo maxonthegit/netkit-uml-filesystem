@@ -1,0 +1,146 @@
+#!/bin/bash
+
+#     Copyright 2004-2008 Fabio Ricci, Massimo Rimondini - Computer Networks
+#     Research Group, Roma Tre University.
+#
+#     This file is part of Netkit.
+#
+#     Netkit is free software: you can redistribute it and/or modify it under
+#     the terms of the GNU General Public License as published by the Free
+#     Software Foundation, either version 3 of the License, or (at your option)
+#     any later version.
+#
+#     Netkit is distributed in the hope that it will be useful, but WITHOUT ANY
+#     WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+#     FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more
+#     details.
+#
+#     You should have received a copy of the GNU General Public License along
+#     with Netkit.  If not, see <http://www.gnu.org/licenses/>.
+
+# This script is used to generate test signatures. It is meant to be run from
+# inside virtual machines.
+
+# ANSI style escape sequences
+DELIMITER_TEXT=$'\e[34;1m'
+NORMAL_TEXT=$'\e[0m\e[34m'
+PLAIN_TEXT=$'\e[0m'
+INFO_FIELD=$'\e[34;2;1m'
+HIDE_CURSOR=$'\e[?25l'
+SHOW_CURSOR=$'\e[?25h'
+
+HOST_DIR="/hostlab"
+TEST_DIR="_test"
+RESULTS_DIR="results"
+RESULTS_PATH="$HOST_DIR/$TEST_DIR/$RESULTS_DIR"
+DEFAULT_TEST_FILE="$HOSTNAME.default"
+USER_TEST_FILE="$HOSTNAME.user"
+
+# This function cleans the output of test commands a bit
+clean_output() {
+   grep -v grep | \
+   grep -v awk  | \
+   grep -v sed  | \
+   grep -v sort | \
+   grep -v netkit-test-phase | \
+   grep -v sleep | \
+   sort
+}
+
+# This function displays a rolling dot
+heartbeat() {
+   { while true; do
+      echo -ne ".  \b\b\b"; sleep 1
+      echo -ne " . \b\b\b"; sleep 1; 
+      echo -ne "  .\b\b\b"; sleep 1;
+      echo -ne " . \b\b\b"; sleep 1;
+   done; } &
+   LAST_HEARTBEAT_PID=$!
+   disown -a
+}
+
+# This function stops an existing rolling dot
+kill_heartbeat() {
+   kill $LAST_HEARTBEAT_PID
+}
+
+# Check if hostlab is mounted
+if ! mount | grep -q "$HOST_DIR"; then
+   echo "${DELIMITER_TEXT}ERROR${NORMAL_TEXT}: The host lab directory is not mounted properly."
+   echo "Sorry, unable to perform the test. Giving up."
+   echo "Press any key or wait 30 seconds to shut down this virtual machine."
+   read -sn 1 -t 30
+   halt
+fi
+
+echo -n "${NORMAL_TEXT}Waiting for virtual machines to start..."
+   while [ ! -e "$HOST_DIR/readyfor.test" ]; do
+   sleep 1
+done
+
+echo "ok."
+
+[ ! -d "$RESULTS_PATH" ] && mkdir -p "$RESULTS_PATH"
+   
+############################################
+## User defined test
+############################################
+
+if [ -x "$HOST_DIR/$TEST_DIR/$HOSTNAME.test" ]; then
+   echo -en "${DELIMITER_TEXT}Running user defined test, please wait...${NORMAL_TEXT} [   ]\b\b\b\b${HIDE_CURSOR}"
+   heartbeat
+   exec 10>&1 >"$RESULTS_PATH/$USER_TEST_FILE"
+   "$HOST_DIR/$TEST_DIR/$HOSTNAME.test"
+   exec 1>&10 10>&-
+   kill_heartbeat
+   echo "${SHOW_CURSOR}"
+fi
+
+
+# If no user defined test was found, wait for the lab to settle
+if [ ! -x "$HOST_DIR/$TEST_DIR/$HOSTNAME.test" ]; then
+   echo -e "${DELIMITER_TEXT}Waiting 1 minute for the lab to settle...${NORMAL_TEXT}"
+   sleep 1m
+fi
+
+
+echo -en "${DELIMITER_TEXT}Running predefined lab test, please wait...${NORMAL_TEXT} [   ]\b\b\b\b${HIDE_CURSOR}"
+# Show that the virtual machine is still alive
+heartbeat
+
+# Backup the descriptor associated to the standard output before redirecting it
+exec 10>&1 >"$RESULTS_PATH/$DEFAULT_TEST_FILE"
+
+############################################
+## Change the following lines to modify the default test
+############################################
+
+echo '[NETWORK INTERFACES]'
+# MAC addresses are randomly generated, so they must not be reported
+/usr/sbin/ip addr show | grep -v link | sed -r 's/^[0-9]+:/===\n/' | awk -v RS='===\n' -v FS='\n' '(NR!=1) {gsub("\n",""); print}' | clean_output
+echo
+echo '[ROUTING TABLE]'
+/sbin/route -n | sed -n '3,$p' | clean_output
+echo
+echo '[LISTENING PORTS]'
+/bin/netstat -tuwln  | sed -n '3,$p' | clean_output
+echo '[PROCESSES]'
+/bin/ps -e -o uid,command | sed -n '2,$p' | clean_output
+echo
+
+
+############################################
+## End of the default test
+############################################
+
+# Restore stdout and close fd 10
+exec 1>&10 10>&-
+
+kill_heartbeat
+echo "${SHOW_CURSOR}"
+
+echo "Done."
+echo "This virtual machine should automatically shut down in a while."
+touch "$HOST_DIR/$HOSTNAME.testdone"
+/sbin/halt
+

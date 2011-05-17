@@ -1,0 +1,369 @@
+==============================================================================
+                                 NETKIT FILESYSTEM
+                                   Version F5.2
+==============================================================================
+
+This package provides a filesystem image for use with Netkit virtual machines.
+
+
+=== ABOUT THIS FILESYSTEM ===
+
+This package contains a filesystem image of an installed Debian GNU/Linux
+distribution including several packages that can profitably be used within a
+network emulation. The filesystem image is conceived for usage with Netkit.
+
+A complete list of the packages installed in the filesystem is provided inside
+the file 'installed-packages'.
+
+A virtual machine filesystem is a special file on the host machine. There
+exists a single ``model'' filesystem that is shared by all the virtual machines
+and provides the full suite of tools. When a virtual machine using that
+filesystem is run, every change to that model filesystem is written to a
+separate file on the host (a Copy-On-Write, shortly COW, file). This saves a
+significant amount of disk space.
+The location and name of the file storing the model filesystem can be configured
+inside the netkit.conf file or can be specified by using a command line option
+of vstart. COW files are automatically created when a virtual machine
+is first started. For information about their names and locations, see the
+documentation of vstart.
+COW files and model files cannot be mixed. That is, if a COW file for a virtual
+machine has been created on the basis of a certain model filesystem, then every
+virtual machine using that COW file must use the same model filesystem as well.
+In other words, COW files and model files cannot be arbitrarily coupled.
+
+In Netkit each virtual machine has its own filesystem. Hence, if you create,
+alter or delete a file inside a virtual machine, the change will only involve
+that machine. Filesystems are usually preserved across reboots of the virtual
+machines, so that you can save your configuration data and retrieve it when the
+machine is later restarted. However, this does not applies to Netkit labs, where
+the configuration is supposed to be fetched from the lab files every time the
+lab is started.
+
+In principle, nothing forces to use particular combinations of kernels and
+filesystems. Nevertheless, filesystems may contain tools that have been
+installed for use with a specific kernel version. It is therefore advised to
+always use the most recent released kernels and filesystems.
+
+
+=== ALTERING AN EXISTING FILESYSTEM IMAGE ===
+
+Sometimes you may need to permanently alter the contents of a Netkit filesystem
+image. This is usually the case if, for example, you need an additional tool to
+be available inside virtual machines.
+
+You have two possibilities to achieve this. One is to start a virtual machine
+for which the COW file is disabled and filesystem changes are written directly
+to the model file. You are also likely interested in connecting this virtual
+machine to the Internet, so that packages can be downloaded and installed
+directly. Also, package installation may require increasing the default amount
+of memory assigned to virtual machines. All these things can be obtained by
+using vstart options: refer to the documentation of vstart in order to know how
+to do this. Note that, in this case, it is very important to stop the virtual
+machine gracefully, either by using vhalt or by using some other shutdown
+command directly inside the virtual machine. Failure to do so may result in a
+corrupt filesystem image.
+
+The other possibility is to directly mount the filesystem in a directory on the
+host, and then working in that directory. In this case you would proceed as
+follows (note that all the commands must be run with root privileges).
+First of all, since the Netkit filesystem image contains a partition table, and
+the filesystem is actually contained inside the first partition, you need to
+discover the offset at which the filesystem actually starts. In order to do so,
+you would use a command like the following:
+
+/sbin/fdisk -lu netkit-fs-i386-F5.0
+You must set cylinders.
+You can do this from the extra functions menu.
+
+Disk netkit-fs-i386-F5.0: 0 MB, 0 bytes
+1 heads, 63 sectors/track, 0 cylinders, total 0 sectors
+Units = sectors of 1 * 512 = 512 bytes
+Disk identifier: 0x00000000
+
+               Device Boot      Start         End      Blocks   Id  System
+netkit-fs-i386-F5.0p1   *          64     3145715     1572826   83  Linux
+Partition 1 has different physical/logical endings:
+     phys=(1023, 0, 63) logical=(49931, 0, 63)
+
+
+In the list of partitions, observe the value 64 (or whichever else) for the
+start of the partition. This value, multiplied by the display units (512
+bytes), gives you the actual offset of the filesystem (in the example above,
+64*512=32768). At this point, you can mount the Netkit filesystem in a
+directory of your choice, say ``netkit_fs'', in the following way:
+
+mount -o loop,offset=32768 netkit-fs-i386-F5.0 netkit_fs
+
+If you want to install packages inside that filesystem, you will likely need to
+set up a DNS in netkit_fs/etc/resolv.conf. To do so, simply copy the contents
+of your host resolv.conf to the just mounted filesystem:
+
+cp /etc/resolv.conf netkit_fs/etc
+
+You can then start working from ``inside'' the Netkit filesystem:
+
+chroot netkit_fs
+
+In this way, a new sheel is started in an environment in which the filesystem
+root ('/') is changed to become netkit_fs. As a consequence, all the commands
+and tools you run from now onwards are picked from the Netkit filesystem and can
+only affect the netkit_fs directory. For example, if you do an ``apt-get install
+something'', this will only affect the Netkit filesystem, leaving your host
+packages alone.
+In order to abandon this environment, you can simply exit from the shell like
+you would from a standard shell, i.e., using the command ``exit''. After doing
+this, you can unmount the filesystem by typing:
+
+umount netkit_fs
+
+That's all. At this point, every change you made to the filesystem image is
+stored permanently and will be available inside every virtual machine.
+
+
+=== RESIZING (ENLARGING) THE FILESYSTEM IMAGE ===
+
+In some circumstances you may need more room inside the Netkit filesystem in
+order to install additional tools. A typical example is when you want to compile
+some tool from source code and choose to install a build environment inside
+Netkit for simplicity. In the event that available space in the shipped
+filesystem image is not enough, you can choose to resize that image without loss
+of data.
+
+Consider that the following procedure requires administrative privileges on your
+host and, as such, should be carried on with care. In particular, this is just a
+bare sequence of steps without any checks for errors or exceptional conditions
+(e.g., availability of loopback devices, validity of the partition table, etc.).
+Please take it as a reference rather than a one-fits-all scripted solution.
+
+# 1) First of all, we need to choose which filesystem image we want to modify
+# as well as the target size. The latter can be specified using a suffix such as
+# 'M' (MegaBytes) or 'G' (GigaBytes).
+# For convenience, we put both parameters in environment variables.
+FILESYSTEM_IMAGE=netkit-fs-i386-F5.1
+NEW_SIZE=10G
+# 2) Now we extend the size of the image without overwriting existing bytes.
+# This is achieved by writing count=0 blocks and seeking to the
+# seek=$NEW_SIZE'th block, with a block size of bs=1 byte.
+dd if=/dev/zero of=$FILESYSTEM_IMAGE count=0 seek=$NEW_SIZE bs=1
+# 3) We now need to update the partition table to fit the new image size. For
+# this purpose, first of all we seek for an available loopback device and then
+# attach it to our filesystem image.
+NEXT_LOOP=$(sudo losetup -f)
+sudo losetup $NEXT_LOOP $FILESYSTEM_IMAGE
+# 4) Here we actually update the partition table. This command recreates a
+# primary partition starting at sector 64, taking all available space (default
+# choice) and with type Linux. The bootable flag (*) is optional.
+echo "64,,L,*" | sudo sfdisk -LuS --no-reread $NEXT_LOOP
+# 5) We release the loopback device and reconfigure it to point to the
+# filesystem inside the just-created partition. Note that the filesystem starts
+# 64*512=32768 bytes far away from the beginning of the image.
+sudo losetup -d $NEXT_LOOP
+sudo losetup -o 32768 $NEXT_LOOP $FILESYSTEM_IMAGE
+# 6) At this point we perform the actual resizing. This requires a clean
+# filesystem, therefore we first force a filesystem check. resize2fs is then
+# invoked, thus extending the filesystem to the available space in the
+# partition. Last, we check the filesystem once more for safety.
+sudo e2fsck -f $NEXT_LOOP
+sudo resize2fs $NEXT_LOOP
+sudo e2fsck -f $NEXT_LOOP
+# 7) We can now release the loopback device. The filesystem is then ready for
+# use.
+sudo losetup -d $NEXT_LOOP
+
+
+=== BUILDING A CUSTOM FILESYSTEM IMAGE FROM SCRATCH ===
+
+The process of building from scratch a filesystem image to be used with Netkit
+is rather complex. For this reason, starting from version 5.0, the filesystem
+package ships with an automated build procedure.
+
+*********************************** WARNING ************************************
+*********************************** WARNING ************************************
+*********************************** WARNING ************************************
+*********************************** WARNING ************************************
+*********************************** WARNING ************************************
+
+As the filesystem build procedure frequently needs root access to your host, we
+provide no warranty (once more, NO WARRANTY) that using it will not break your
+system. We put all the necessary care in ensuring that no unnecessary
+components are touched, yet interactions with unexpected host settings may
+still happen and cause damage.
+The procedure is meant to be used by developers or people who know how to make
+a filesystem image but miss the necessary tweaks to make it become a Netkit
+filesystem. Standard users, in general, have no reason to execute it.
+Please *** AVOID *** using this procedure if you are not sure about what you are
+doing or are not ready to debug potential serious problems on your host.
+
+******************************** END OF WARNING ********************************
+
+
+1. PREREQUISITES
+
+In order to be able to run the filesystem build procedure, you need a Debian
+host system with a suitable build environment. This includes installing at
+least the following packages: autoconf, automake, debootstrap, libtool,
+binutils, gcc, gcc-multilib.
+Several other packages are likely required, but they strongly depend on what
+you are going to install inside the filesystem image. Frequently, a failure
+of the build procedure can be ascribed to the lack of some package, and the
+error message can provide some hint about what is missing.
+Please ensure that you have at least twice as much disk space as the desired
+filesystem image size.
+
+
+2. THE BUILD PROCESS
+
+The build procedure can be started by using the provided Makefile.devel. In
+general, all you have to do is to type:
+
+make -f Makefile.devel filesystem
+
+The makefile also supports other targets and some configuration settings that
+allow to tune the build process. Simply type
+
+make -f Makefile.devel
+
+to get a short help of the available options.
+
+The build procedure performs the following operations.
+
+2.1. DOWNLOAD OF BASE PACKAGES
+
+First of all, the debootstrap command is used to download some fundamental
+packages that make up a Debian system. The packages are simply downloaded and
+stored inside a compressed file for possible later reuse.
+
+2.2. DISK IMAGE CREATION
+
+Then, an empty disk image for the Netkit filesystem is created using the dd
+command. In particular, dd is used to create a sparse (count=0, seek=SIZE
+arguments of dd) zero-filled file with a size specified by the user. The fact
+that the file is sparse means that data is not written to the file until really
+needed. This shortens the time required for the file creation a lot, because the
+file is initially empty.
+
+2.3. PARTITION TABLE CREATION
+
+Based on the size specified by the user, a partition table is created inside
+the disk image. The partition table contains a single partition that
+accommodates the actual filesystem.
+
+2.4. FILESYSTEM CREATION
+
+Before actually creating the filesystem inside the just-made partition, some
+computations are performed to obtain the correct offset at which it is expected
+to start, in terms of bytes and blocks. This is required in order to supply
+mkfs with the correct filesystem size, even in the case in which the partition
+does not end at a block boundary.
+
+2.5. BASE SYSTEM INSTALLATION
+
+At this point, a basic Debian installation is performed inside the newly
+created partition. To this purpose, the debootstrap command is invoked and
+instructed to fetch packages from the compressed archive created at step 2.1.
+Note that, even if packages are actually available on the local filesystem, an
+Internet connection is still required for debootstrap to be able to fetch an
+updated list of packages.
+Debian distributions are continuously changing. This is especially true for the
+unstable distribution. Therefore, errors are not unlikely to occur at this
+step. These errors are usually due to broken dependencies, and can be fixed by
+specifying some additional early-installed packages using the
+ADDITIONAL_PACKAGES argument of the makefile. To discover the packages that are
+affected by this problem you can try looking inside the directory where the
+Netkit filesystem is temporarily mounted (usually, mounted_fs) for a directory
+named `debootstrap'. This directory should contain a log of the installation
+operations, including the error that made them fail.
+
+2.6. DOWNLOAD OF ADDITIONAL PACKAGES
+
+At this step, additional user-specified packages are downloaded for future
+installation inside the filesystem. The list of packages to be installed is
+contained inside the file `fs-build/packages-list'. Once more, the packages are
+first downloaded to a compressed file for future reuse.
+
+2.7. ADDITIONAL PACKAGES INSTALLATION
+
+The packages downloaded at step 2.6 are then installed to the Netkit
+filesystem. Before doing this, two additional operations are accomplished.
+First, any existing debconf settings are fetched from the file
+`fs-build/debconf-package-selections', so that the installation can proceed
+without user intervention to configure the packages. If any new, never
+previously installed package is requested, then the installation process will
+propose the usual interactive configuration dialogs for that package. Once the
+installation process finishes, the new configuration settings are automatically
+stored inside the debconf-package-selections file, so that any future builds can
+again be performed non-interactively. If you explicitly want to re-configure
+all the packages interactively, you can simply empty the
+debconf-package-selections file by using a command similar to the following:
+
+echo > debconf-package-selections
+
+Second, some diversions for the package management system are set up. A
+diversion is a directive that tells the package installer to rename some file
+before actually installing it. This is often useful to prevent other existing
+files from being overwritten, or to "divert" a file to a temporary location so
+that it can be replaced by a fake version. This technique is used primarily to
+prevent services and daemons from being started on the host while installing
+packages in the Netkit filesystem. Diversions are obtained from the
+`fs-build/netkit-tweaks/diversions' directory tree. Files inside the
+`diversions' directory are organized in subdirectories that correspond to the
+contents of the Netkit filesystem. For every non-empty file in the
+`diversions' directory, a diversion is created in the Netkit filesystem from
+that file to the same with some altered name (usually, with a `orig-' prefix -
+note that using suffixes instead may create problems when installing tools
+compiled from source). When all the packages have been installed, all
+these files are removed, their diversions deleted and the original files are
+put back in place. On the other hand, for each empty file in the `diversions'
+directory, a permanent diversion is created from that file to the same file
+with some altered name. This is useful, for example, if different versions of
+the same file must appear in the Netkit filesystem.
+
+At this point, packages are actually installed.
+
+2.8. TOOLS COMPILATION
+
+Some tools are not available and require being compiled from source code. This
+includes, for example, MPLS-enabled versions of iproute, ebtables, iptables,
+quagga. This step accomplishes this task. Source packages are automatically
+downloaded as required, patches from `fs-build/tools-src' are automatically
+applied and the tools are automatically configured and compiled. This procedure
+is contained in a separate makefile inside `fs-build/tools-src'. WARNING: this
+makefile is not intended for standalone usage, and should not be invoked
+directly. Failure to comply may result in packages installed inside improper
+paths on your host instead of the Netkit filesystem.
+
+2.9. NETKIT-SPECIFIC TWEAKS
+
+Several tweaks are performed at this point to turn the filesystem into a Netkit
+filesystem.
+First of all, all the files inside `fs-build/netkit-tweaks/filesystem-tweaks'
+are copied to the Netkit filesystem. Then, all the services listed in the files
+`fs-build/netkit-tweaks/disabled-services' and
+`fs-build/netkit-tweaks/disabled-system-services' are automatically disabled to
+shorten virtual machine boot time. Services listed in `disabled-system-services'
+correspond to early boot scripts inside /etc/rcS.d, while services listed in
+`disabled-services' are runlevel-specific services, usually found in /etc/rc2.d.
+Additional tweaks are performed by running all the scripts inside
+`fs-build/netkit-tweaks/tweaks.d'.
+
+
+=== NOTES ABOUT THE HOST FILESYSTEM (FAT32 users should read this carefully) ===
+
+In principle, there is no restriction on the filesystem on which Netkit can be
+installed. However, performing an installation over a non-standard Linux
+filesystem (such as FAT32) may cause performance losses or even malfunctions.
+
+Linux filesystems (ext2, ext3, etc.) support attributes which other filesystems
+do not (e.g., symbolic links and per-user file permissions), and this may
+prevent some of the Netkit commands from working properly when Netkit is
+installed on a non-standard filesystem.
+
+Moreover, ext2/ext3 provide support for sparse files, that is, files whose size
+is very large but for which disk space is only allocated when actually needed
+(in pratice, null bytes do not consume disk space). Virtual machine filesystems
+are sparse files. Hence, if Netkit is installed on a non-standard filesystem, a
+lot of disk space is consumed and, as a consequence, very intense disk activity
+takes place whenever a virtual machine is started up.
+
+It is strongly recommended that you install Netkit on a standard Linux
+partition.
