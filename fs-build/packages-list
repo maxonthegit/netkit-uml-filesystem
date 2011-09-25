@@ -47,6 +47,7 @@ file
 findutils
 freeradius
 ftp
+gcc
 grep
 groff
 groff-base
@@ -74,6 +75,7 @@ lrzsz
 lsof
 lynx
 mailx
+make
 makedev
 man-db
 manpages
