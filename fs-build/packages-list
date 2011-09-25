@@ -121,6 +121,7 @@ procps
 proftpd
 psmisc
 python
+python-scapy
 quagga
 racoon
 rcconf
