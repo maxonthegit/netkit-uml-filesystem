@@ -150,6 +150,7 @@ sysvinit
 tar
 tcpd
 tcpdump
+tcpick
 tcpreen
 tcpreplay
 tcpslice
